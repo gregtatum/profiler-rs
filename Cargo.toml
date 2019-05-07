@@ -5,4 +5,3 @@ authors = ["Greg Tatum <tatum.creative@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-mach = "0.2.3"
