@@ -31,10 +31,30 @@ impl Core {
         }
     }
 
-    pub fn get_marker_sender(&self) -> mpsc::Sender<BufferThreadMessage> {
-        self.buffer_thread_sender.clone()
+    pub fn get_thread_registrar(&self) -> ThreadRegistrar {
+        ThreadRegistrar {
+            buffer_thread_sender: self.buffer_thread_sender.clone(),
+        }
     }
 }
+
+pub struct ThreadRegistrar {
+    pub buffer_thread_sender: mpsc::Sender<BufferThreadMessage>,
+}
+
+impl ThreadRegistrar {
+    pub fn register(self) {
+        // Consume `self` and put the data into TLS.
+        let ThreadRegistrar {
+            buffer_thread_sender,
+        } = self;
+
+        BUFFER_THREAD_SENDER.with(|maybe_sender| {
+            *maybe_sender.borrow_mut() = Some(buffer_thread_sender);
+        });
+    }
+}
+
 
 thread_local! {
     static BUFFER_THREAD_SENDER: RefCell<
@@ -68,22 +88,22 @@ mod tests {
     fn can_create_and_store_markers() {
         let profiler = Core::new(Duration::new(60, 0));
 
-        let sender1 = profiler.get_marker_sender();
+        let thread_registrar1 = profiler.get_thread_registrar();
 
         let thread_handle1 = thread::spawn(move || {
-            store_marker_sender(sender1);
+            thread_registrar1.register();
             add_marker(Box::new(StaticStringMarker::new("Thread 1, Marker 1")));
             add_marker(Box::new(StaticStringMarker::new("Thread 1, Marker 2")));
             add_marker(Box::new(StaticStringMarker::new("Thread 1, Marker 3")));
         });
 
-        let sender2 = profiler.get_marker_sender();
+        let thread_registrar2 = profiler.get_thread_registrar();
 
         let thread_handle2 = thread::spawn(move || {
-            store_marker_sender(sender2);
-            add_marker(Box::new(StaticStringMarker::new("Thread 1, Marker 1")));
-            add_marker(Box::new(StaticStringMarker::new("Thread 1, Marker 2")));
-            add_marker(Box::new(StaticStringMarker::new("Thread 1, Marker 3")));
+            thread_registrar2.register();
+            add_marker(Box::new(StaticStringMarker::new("Thread 2, Marker 1")));
+            add_marker(Box::new(StaticStringMarker::new("Thread 2, Marker 2")));
+            add_marker(Box::new(StaticStringMarker::new("Thread 2, Marker 3")));
         });
 
         thread_handle1
