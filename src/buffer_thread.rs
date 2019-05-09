@@ -1,15 +1,19 @@
-use super::markers::Marker;
-use super::time_expiring_buffer::{BufferEntry, TimeExpiringBuffer};
+use super::markers::{Marker, MarkersSerializer};
+use super::time_expiring_buffer::{TimeExpiringBuffer};
+use serde_json;
+use serde_json::json;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 pub enum BufferThreadMessage {
     AddMarker(Box<Marker + Send>),
     ClearExpiredMarkers,
+    SerializeMarkers,
 }
 
 pub struct BufferThread {
     receiver: mpsc::Receiver<BufferThreadMessage>,
+    serialization_sender: mpsc::Sender<serde_json::Value>,
     markers: TimeExpiringBuffer<Box<Marker + Send>>,
     // TODO - This is not correct, it should be the start time of each thread where the marker
     // is coming from.
@@ -20,9 +24,11 @@ impl BufferThread {
     pub fn new(
         receiver: mpsc::Receiver<BufferThreadMessage>,
         entry_lifetime: Duration,
+        serialization_sender: mpsc::Sender<serde_json::Value>,
     ) -> BufferThread {
         BufferThread {
             receiver,
+            serialization_sender,
             // TODO - This is not correct.
             thread_start: Instant::now(),
             markers: TimeExpiringBuffer::new(entry_lifetime),
@@ -38,6 +44,11 @@ impl BufferThread {
                 Ok(BufferThreadMessage::ClearExpiredMarkers) => {
                     self.markers.remove_expired();
                 }
+                Ok(BufferThreadMessage::SerializeMarkers) => {
+                    self.serialization_sender
+                        .send(self.serialize_markers())
+                        .unwrap();
+                }
                 Err(_) => {
                     break;
                 }
@@ -45,9 +56,9 @@ impl BufferThread {
         }
     }
 
-    fn serialize_markers(&self) {
-        for BufferEntry { created_at, value } in self.markers.iter() {
-            value.serialize(&self.thread_start, created_at);
-        }
+    fn serialize_markers(&self) -> serde_json::Value {
+        json!({
+            "markers": MarkersSerializer::new(&self.thread_start, &self.markers)
+        })
     }
 }
