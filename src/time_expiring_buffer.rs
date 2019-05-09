@@ -45,6 +45,10 @@ impl<T> TimeExpiringBuffer<T> {
             }
         }
     }
+
+    pub fn iter(&self) -> std::collections::vec_deque::Iter<BufferEntry<T>> {
+        self.buffer.iter()
+    }
 }
 
 #[cfg(test)]

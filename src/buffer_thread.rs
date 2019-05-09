@@ -1,7 +1,7 @@
 use super::markers::Marker;
-use super::time_expiring_buffer::TimeExpiringBuffer;
+use super::time_expiring_buffer::{BufferEntry, TimeExpiringBuffer};
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub enum BufferThreadMessage {
     AddMarker(Box<Marker + Send>),
@@ -11,6 +11,9 @@ pub enum BufferThreadMessage {
 pub struct BufferThread {
     receiver: mpsc::Receiver<BufferThreadMessage>,
     markers: TimeExpiringBuffer<Box<Marker + Send>>,
+    // TODO - This is not correct, it should be the start time of each thread where the marker
+    // is coming from.
+    thread_start: Instant,
 }
 
 impl BufferThread {
@@ -20,6 +23,8 @@ impl BufferThread {
     ) -> BufferThread {
         BufferThread {
             receiver,
+            // TODO - This is not correct.
+            thread_start: Instant::now(),
             markers: TimeExpiringBuffer::new(entry_lifetime),
         }
     }
@@ -37,6 +42,12 @@ impl BufferThread {
                     break;
                 }
             }
+        }
+    }
+
+    fn serialize_markers(&self) {
+        for BufferEntry { created_at, value } in self.markers.iter() {
+            value.serialize(&self.thread_start, created_at);
         }
     }
 }
