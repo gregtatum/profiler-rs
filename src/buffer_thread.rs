@@ -1,5 +1,6 @@
 use super::markers::{Marker, MarkersSerializer};
-use super::time_expiring_buffer::{TimeExpiringBuffer};
+use super::time_expiring_buffer::TimeExpiringBuffer;
+use crate::sampler::Sample;
 use serde_json;
 use serde_json::json;
 use std::sync::mpsc;
@@ -7,6 +8,7 @@ use std::time::{Duration, Instant};
 
 pub enum BufferThreadMessage {
     AddMarker(Box<Marker + Send>),
+    AddSample(Sample),
     ClearExpiredMarkers,
     SerializeMarkers,
 }
@@ -15,6 +17,7 @@ pub struct BufferThread {
     receiver: mpsc::Receiver<BufferThreadMessage>,
     serialization_sender: mpsc::Sender<serde_json::Value>,
     markers: TimeExpiringBuffer<Box<Marker + Send>>,
+    samples: TimeExpiringBuffer<Sample>,
     // TODO - This is not correct, it should be the start time of each thread where the marker
     // is coming from.
     thread_start: Instant,
@@ -32,6 +35,7 @@ impl BufferThread {
             // TODO - This is not correct.
             thread_start: Instant::now(),
             markers: TimeExpiringBuffer::new(entry_lifetime),
+            samples: TimeExpiringBuffer::new(entry_lifetime),
         }
     }
 
@@ -40,6 +44,9 @@ impl BufferThread {
             match self.receiver.recv() {
                 Ok(BufferThreadMessage::AddMarker(marker)) => {
                     self.markers.push_back(marker);
+                }
+                Ok(BufferThreadMessage::AddSample(sample)) => {
+                    self.samples.push_back(sample);
                 }
                 Ok(BufferThreadMessage::ClearExpiredMarkers) => {
                     self.markers.remove_expired();

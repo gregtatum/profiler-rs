@@ -1,4 +1,5 @@
 use crate::buffer_thread::{BufferThread, BufferThreadMessage};
+use crate::sampler_thread::{SamplerThread, SamplerThreadMessage};
 use crate::markers::Marker;
 use serde_json;
 use std::cell::RefCell;
@@ -10,13 +11,16 @@ use std::time::Duration;
 /// threads.
 pub struct MainThreadCore {
     buffer_join_handle: thread::JoinHandle<()>,
+    sampler_join_handle: thread::JoinHandle<()>,
     buffer_thread_sender: mpsc::Sender<BufferThreadMessage>,
+    sampler_thread_sender: mpsc::Sender<SamplerThreadMessage>,
     serialization_receiver: mpsc::Receiver<serde_json::Value>,
 }
 
 impl MainThreadCore {
-    pub fn new(entry_lifetime: Duration) -> MainThreadCore {
+    pub fn new(entry_lifetime: Duration, sampling_interval: Duration) -> MainThreadCore {
         let (buffer_thread_sender, buffer_thread_receiver) = mpsc::channel();
+        let (sampler_thread_sender, sampler_thread_receiver) = mpsc::channel();
         let (serialization_sender, serialization_receiver) = mpsc::channel();
 
         let buffer_join_handle =
@@ -31,9 +35,25 @@ impl MainThreadCore {
                     buffer_thread.start();
                 });
 
+        let sampler_join_handle = {
+            let buffer_thread_sender2 = buffer_thread_sender.clone();
+            thread::Builder::new()
+                .name("Profiler Sampler".into())
+                .spawn(move || {
+                    let mut sampler_thread = SamplerThread::new(
+                        sampler_thread_receiver,
+                        buffer_thread_sender2,
+                        sampling_interval,
+                    );
+                    sampler_thread.start();
+                })
+        };
+
         MainThreadCore {
             buffer_join_handle: buffer_join_handle.unwrap(),
+            sampler_join_handle: sampler_join_handle.unwrap(),
             buffer_thread_sender,
+            sampler_thread_sender,
             serialization_receiver,
         }
     }
@@ -41,6 +61,7 @@ impl MainThreadCore {
     pub fn get_thread_registrar(&self) -> ThreadRegistrar {
         ThreadRegistrar {
             buffer_thread_sender: self.buffer_thread_sender.clone(),
+            sampler_thread_sender: self.sampler_thread_sender.clone(),
         }
     }
 
@@ -57,17 +78,23 @@ impl MainThreadCore {
 
 pub struct ThreadRegistrar {
     pub buffer_thread_sender: mpsc::Sender<BufferThreadMessage>,
+    pub sampler_thread_sender: mpsc::Sender<SamplerThreadMessage>,
 }
 
 impl ThreadRegistrar {
     pub fn register(self) {
-        // Consume `self` and put the data into TLS.
+        // Consume `self` and put the data into thread local storage.
         let ThreadRegistrar {
             buffer_thread_sender,
+            sampler_thread_sender,
         } = self;
 
         BUFFER_THREAD_SENDER.with(|maybe_sender| {
             *maybe_sender.borrow_mut() = Some(buffer_thread_sender);
+        });
+
+        SAMPLER_THREAD_SENDER.with(|maybe_sender| {
+            *maybe_sender.borrow_mut() = Some(sampler_thread_sender);
         });
     }
 }
@@ -77,7 +104,11 @@ impl ThreadRegistrar {
 thread_local! {
     static BUFFER_THREAD_SENDER: RefCell<
         Option<mpsc::Sender<BufferThreadMessage>>
-    > = RefCell::new(None)
+    > = RefCell::new(None);
+
+    static SAMPLER_THREAD_SENDER: RefCell<
+        Option<mpsc::Sender<SamplerThreadMessage>>
+    > = RefCell::new(None);
 }
 
 pub fn add_marker(marker: Box<Marker + Send>) {
@@ -98,7 +129,7 @@ mod tests {
 
     #[test]
     fn can_create_and_store_markers() {
-        let profiler_core = MainThreadCore::new(Duration::new(60, 0));
+        let profiler_core = MainThreadCore::new(Duration::new(60, 0), Duration::from_millis(10));
         let thread_registrar1 = profiler_core.get_thread_registrar();
 
         let thread_handle1 = thread::spawn(move || {
