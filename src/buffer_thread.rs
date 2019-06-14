@@ -65,7 +65,8 @@ impl BufferThread {
 
     fn serialize_markers(&self) -> serde_json::Value {
         json!({
-            "markers": MarkersSerializer::new(&self.thread_start, &self.markers)
+            "markers": MarkersSerializer::new(&self.thread_start, &self.markers),
+            "samples": SamplesSerializer::new(&self.thread_start, &self.samples)
         })
     }
 }

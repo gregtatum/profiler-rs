@@ -1,8 +1,19 @@
+use crate::time_expiring_buffer::TimeExpiringBuffer;
+use serde::{Serialize, Serializer};
+use std::time::Instant;
+
 const MAX_NATIVE_FRAMES: usize = 1024;
 
 pub struct Sample {
     pub native_stack: NativeStack,
     pub thread_id: u64,
+}
+
+impl Sample {
+    fn serialize(&self, thread_start: &Instant, created_at: &Instant) -> Value {
+        // TODO
+        json!({})
+    }
 }
 
 pub trait Sampler: Send {
@@ -52,5 +63,37 @@ impl NativeStack {
         self.stack_ptrs[self.count] = stack_ptr as u8;
         self.count = self.count + 1;
         Ok(())
+    }
+}
+
+// This struct handles JSON serialization through an iterator interface.
+pub struct SamplesSerializer<'a> {
+    thread_start: &'a Instant,
+    buffer: &'a TimeExpiringBuffer<Sample>,
+}
+
+impl<'a> SamplesSerializer<'a> {
+    pub fn new(
+        thread_start: &'a Instant,
+        buffer: &'a TimeExpiringBuffer<Sample>,
+    ) -> SamplesSerializer<'a> {
+        SamplesSerializer {
+            thread_start,
+            buffer,
+        }
+    }
+}
+
+impl<'a> Serialize for SamplesSerializer<'a> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.collect_seq(self.buffer.iter().map(
+            |Sample {
+                 native_stack,
+                 thread_id,
+             }| value.serialize(self.thread_start, created_at),
+        ))
     }
 }
