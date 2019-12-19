@@ -1,6 +1,6 @@
 use crate::buffer_thread::{BufferThread, BufferThreadMessage};
-use crate::sampler_thread::{SamplerThread, SamplerThreadMessage};
 use crate::markers::Marker;
+use crate::sampler_thread::{SamplerThread, SamplerThreadMessage};
 use serde_json;
 use std::cell::RefCell;
 use std::sync::mpsc;
@@ -111,7 +111,7 @@ thread_local! {
     > = RefCell::new(None);
 }
 
-pub fn add_marker(marker: Box<Marker + Send>) {
+pub fn add_marker(marker: Box<dyn Marker + Send>) {
     BUFFER_THREAD_SENDER.with(|sender| match *sender.borrow() {
         Some(ref sender) => {
             sender

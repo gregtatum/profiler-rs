@@ -6,20 +6,23 @@ use serde_json::json;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+/// This enum collects all of the different types of messages that we can send to the buffer
+/// thread. The buffer thread is the end point of a multiple producer, single consumer (mpsc)
+/// channel, and this enum is how we communicate with it.
 pub enum BufferThreadMessage {
-    AddMarker(Box<Marker + Send>),
+    AddMarker(Box<dyn Marker + Send>),
     AddSample(Sample),
     ClearExpiredMarkers,
     SerializeMarkers,
 }
 
+/// The BufferThread represents a thread for handling messages that need to be stored in the
+/// profiler buffer. It contains storage for
 pub struct BufferThread {
     receiver: mpsc::Receiver<BufferThreadMessage>,
     serialization_sender: mpsc::Sender<serde_json::Value>,
-    markers: TimeExpiringBuffer<Box<Marker + Send>>,
+    markers: TimeExpiringBuffer<Box<dyn Marker + Send>>,
     samples: TimeExpiringBuffer<Sample>,
-    // TODO - This is not correct, it should be the start time of each thread where the marker
-    // is coming from.
     thread_start: Instant,
 }
 
@@ -32,13 +35,13 @@ impl BufferThread {
         BufferThread {
             receiver,
             serialization_sender,
-            // TODO - This is not correct.
             thread_start: Instant::now(),
             markers: TimeExpiringBuffer::new(entry_lifetime),
             samples: TimeExpiringBuffer::new(entry_lifetime),
         }
     }
 
+    /// This method runs the loop to handle messages.
     pub fn start(&mut self) {
         loop {
             match self.receiver.recv() {

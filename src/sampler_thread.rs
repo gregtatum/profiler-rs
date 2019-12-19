@@ -5,7 +5,7 @@ use std::thread;
 use std::time::Duration;
 
 pub enum SamplerThreadMessage {
-    RegisterThread(Box<Sampler>),
+    RegisterThread(Box<dyn Sampler>),
     PauseSampling,
     StartSampling,
     StopSampling,
@@ -15,7 +15,7 @@ pub struct SamplerThread {
     receiver: mpsc::Receiver<SamplerThreadMessage>,
     to_buffer_thread: mpsc::Sender<BufferThreadMessage>,
     interval: Duration,
-    samplers: Vec<Box<Sampler>>,
+    samplers: Vec<Box<dyn Sampler>>,
 }
 
 impl SamplerThread {

@@ -35,13 +35,13 @@ impl Marker for StaticStringMarker {
 // This struct handles JSON serialization through an iterator interface.
 pub struct MarkersSerializer<'a> {
     thread_start: &'a Instant,
-    buffer: &'a TimeExpiringBuffer<Box<Marker + Send>>,
+    buffer: &'a TimeExpiringBuffer<Box<dyn Marker + Send>>,
 }
 
 impl<'a> MarkersSerializer<'a> {
     pub fn new(
         thread_start: &'a Instant,
-        buffer: &'a TimeExpiringBuffer<Box<Marker + Send>>,
+        buffer: &'a TimeExpiringBuffer<Box<dyn Marker + Send>>,
     ) -> MarkersSerializer<'a> {
         MarkersSerializer {
             thread_start,
