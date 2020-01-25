@@ -3,6 +3,8 @@ name = "profiler"
 version = "0.1.0"
 authors = ["Greg Tatum <tatum.creative@gmail.com>"]
 edition = "2018"
+description = "This is an experimental attempt for me to understand the architecture of a profiler by implementing some features in Rust."
+readme = "README.md"
 
 [dependencies]
 backtrace = "0.3"
@@ -12,3 +14,6 @@ serde = { version = "1.0.91", features = ["derive"] }
 log = "0.4.8"
 pretty_env_logger = "0.3.1"
 ipc-channel = "0.12.2"
+# Only include mach on certain systems.
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies.mach]
+version = "0.3"

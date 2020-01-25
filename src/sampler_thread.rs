@@ -4,13 +4,21 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
+/// These are all of the messages that can be sent to the SamplerThread.
 pub enum SamplerThreadMessage {
-    RegisterThread(Box<dyn Sampler>),
+    /// Each sampler is responsible for sampling a single thread. There are platform
+    /// specific implementations.
+    RegisterSampler(Box<dyn Sampler>),
     PauseSampling,
     StartSampling,
     StopSampling,
 }
 
+/**
+ * The SamplerThread is responsible for orchestrating taking samples from different
+ * threads. It handles the registration of threads, and the platform-dependent signal
+ * calls to stop and stackwalk a thread.
+ */
 pub struct SamplerThread {
     receiver: mpsc::Receiver<SamplerThreadMessage>,
     to_buffer_thread: mpsc::Sender<BufferThreadMessage>,
@@ -19,6 +27,10 @@ pub struct SamplerThread {
 }
 
 impl SamplerThread {
+    /// The MainThreadCore is responsible for initializing this SamplerThread, and can
+    /// pass messages to it using the SamplerThreadMessage. In addition, the
+    /// to_buffer_thread mpsc::Sender is passed in so that the SamplerThread can
+    //  communicate to the buffer thread.
     pub fn new(
         receiver: mpsc::Receiver<SamplerThreadMessage>,
         to_buffer_thread: mpsc::Sender<BufferThreadMessage>,
@@ -32,6 +44,7 @@ impl SamplerThread {
         }
     }
 
+    /// The MainThreadCore creates the SamplerThread, and then immediately starts it.
     pub fn start(&mut self) {
         // Start out paused.
         let mut is_paused = true;
@@ -39,6 +52,8 @@ impl SamplerThread {
 
         loop {
             let unhandled_message = if is_paused {
+                // The profiler is paused. Rather than continue to wake up this thread,
+                // just wait until we get a new message to handle.
                 match self.receiver.recv() {
                     Ok(message) => Some(message),
                     Err(mpsc::RecvError) => {
@@ -47,7 +62,9 @@ impl SamplerThread {
                     }
                 }
             } else {
-                // We are actively sampling.
+                // We are actively sampling, don't block this thread to receive messages.
+                // Only handle any messages received while we were sleeping, and continue
+                // on to sampling.
                 match self.receiver.try_recv() {
                     Ok(message) => Some(message),
                     Err(mpsc::TryRecvError::Empty) => {
@@ -66,7 +83,7 @@ impl SamplerThread {
                 Some(message) => {
                     should_sample = false;
                     match message {
-                        SamplerThreadMessage::RegisterThread(sampler) => {
+                        SamplerThreadMessage::RegisterSampler(sampler) => {
                             self.samplers.push(sampler)
                         }
                         SamplerThreadMessage::StopSampling => {

@@ -2,6 +2,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
+// This file is adapted from the servo project.
+
 use crate::sampler::{Address, NativeStack, Registers, Sampler};
 use libc;
 use mach;
@@ -10,6 +12,7 @@ use std::process;
 
 type MonitoredThreadId = mach::mach_types::thread_act_t;
 
+/// This is the platform specific implementation of a sampler.
 pub struct MacOsSampler {
     thread_id: MonitoredThreadId,
 }
@@ -22,39 +25,70 @@ impl MacOsSampler {
     }
 }
 
+/// These are the various failure cases for suspending and sampling a thread.
+enum SuspendAndSampleError {
+    CouldNotSuspendThread,
+    CouldNotGetRegisters,
+    CouldNotResumeThread,
+}
+
 impl Sampler for MacOsSampler {
     #[allow(unsafe_code)]
-    fn suspend_and_sample_thread(&self) -> Result<NativeStack, ()> {
-        // Warning: The "critical section" begins here.
+    fn suspend_and_sample_thread(&self) -> Result<NativeStack, SuspendAndSampleError> {
+        // -----------------------------------------------------
+        // WARNING: The "critical section" begins here.
+
         // In the critical section:
-        // we must not do any dynamic memory allocation,
-        // nor try to acquire any lock
-        // or any other unshareable resource.
+        //  * Do not do any dynamic memory allocation.
+        //  * Do not try to acquire any lock.
+        //  * Or access any other unshareable resource.
+
+        // First, don't let panic do its thing.
+        // TODO - I'm not sure why this is here, as I dropped it in from the Servo code.
+        // Perhaps they break the flow of the logic or perhaps they allocate?
         let current_hook = panic::take_hook();
         panic::set_hook(Box::new(|_| {
             // Avoiding any allocation or locking as part of standard panicking.
             process::abort();
         }));
+
+        // Now do all the magic to collect the native stack.
         let native_stack = unsafe {
+            // Attempt to suspend the thread.
             if let Err(()) = suspend_thread(self.thread_id) {
                 panic::set_hook(current_hook);
-                return Err(());
+                return Err(SuspendAndSampleError::CouldNotSuspendThread);
             };
+
+            // Attempt to get the registers, and perform a stackwalk. Suspension
+            // could be fallible, while frame_pointer_stack_walk() always returns
+            // a result.
             let native_stack = match get_registers(self.thread_id) {
                 Ok(regs) => Ok(frame_pointer_stack_walk(regs)),
-                Err(()) => Err(()),
+                Err(()) => Err(SuspendAndSampleError::CouldNotGetRegisters),
             };
+
+            // Attempt to resume the thread. If we can't, it's bad enough that we
+            // should abort the process.
             if let Err(()) = resume_thread(self.thread_id) {
-                process::abort();
+                eprintln!("Unable to resume a sampled thread from the profiler.");
+                process.abort();
             }
+
             native_stack
         };
+
+        // Restore panic now that we are done with the unsafe block.
         panic::set_hook(current_hook);
-        // NOTE: End of "critical section".
+
+        // End of "critical section".
+        // -----------------------------------------------------
+
         native_stack
     }
 }
 
+/// Convert a kernel response code into a Rust friendly value.
 fn check_kern_return(kret: mach::kern_return::kern_return_t) -> Result<(), ()> {
     if kret != mach::kern_return::KERN_SUCCESS {
         return Err(());
@@ -62,15 +96,19 @@ fn check_kern_return(kret: mach::kern_return::kern_return_t) -> Result<(), ()> {
     Ok(())
 }
 
+/// Send a signal to suspend the thread at the given ID.
 #[allow(unsafe_code)]
 unsafe fn suspend_thread(thread_id: MonitoredThreadId) -> Result<(), ()> {
     check_kern_return(mach::thread_act::thread_suspend(thread_id))
 }
 
+/// Call the kernel to get the current registers.
 #[allow(unsafe_code)]
 unsafe fn get_registers(thread_id: MonitoredThreadId) -> Result<Registers, ()> {
+    // This holds the result of the
     let mut state = mach::structs::x86_thread_state64_t::new();
     let mut state_count = mach::structs::x86_thread_state64_t::count();
+
     let kret = mach::thread_act::thread_get_state(
         thread_id,
         mach::thread_status::x86_THREAD_STATE64,
@@ -85,6 +123,7 @@ unsafe fn get_registers(thread_id: MonitoredThreadId) -> Result<Registers, ()> {
     })
 }
 
+/// This function wraps the system call to resume into a Rust-friendly type.
 #[allow(unsafe_code)]
 unsafe fn resume_thread(thread_id: MonitoredThreadId) -> Result<(), ()> {
     check_kern_return(mach::thread_act::thread_resume(thread_id))
