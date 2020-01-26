@@ -1,6 +1,6 @@
 use super::markers::{Marker, MarkersSerializer};
 use super::time_expiring_buffer::TimeExpiringBuffer;
-use crate::sampler::Sample;
+use crate::sampler::{Sample, SamplesSerializer};
 use serde_json;
 use serde_json::json;
 use std::sync::mpsc;
@@ -13,7 +13,7 @@ pub enum BufferThreadMessage {
     AddMarker(Box<dyn Marker + Send>),
     AddSample(Sample),
     ClearExpiredMarkers,
-    SerializeMarkers,
+    SerializeBuffer(Instant),
 }
 
 /// The BufferThread represents a thread for handling messages that need to be stored in the
@@ -23,7 +23,6 @@ pub struct BufferThread {
     serialization_sender: mpsc::Sender<serde_json::Value>,
     markers: TimeExpiringBuffer<Box<dyn Marker + Send>>,
     samples: TimeExpiringBuffer<Sample>,
-    thread_start: Instant,
 }
 
 impl BufferThread {
@@ -35,7 +34,6 @@ impl BufferThread {
         BufferThread {
             receiver,
             serialization_sender,
-            thread_start: Instant::now(),
             markers: TimeExpiringBuffer::new(entry_lifetime),
             samples: TimeExpiringBuffer::new(entry_lifetime),
         }
@@ -54,9 +52,9 @@ impl BufferThread {
                 Ok(BufferThreadMessage::ClearExpiredMarkers) => {
                     self.markers.remove_expired();
                 }
-                Ok(BufferThreadMessage::SerializeMarkers) => {
+                Ok(BufferThreadMessage::SerializeBuffer(profiler_start)) => {
                     self.serialization_sender
-                        .send(self.serialize_markers())
+                        .send(self.serialize_buffer(&profiler_start))
                         .unwrap();
                 }
                 Err(_) => {
@@ -66,9 +64,10 @@ impl BufferThread {
         }
     }
 
-    fn serialize_markers(&self) -> serde_json::Value {
+    fn serialize_buffer(&self, profiler_start: &Instant) -> serde_json::Value {
         json!({
-            "markers": MarkersSerializer::new(&self.thread_start, &self.markers)
+            "markers": MarkersSerializer::new(profiler_start, &self.markers),
+            "samples": SamplesSerializer::new(profiler_start, &self.samples),
         })
     }
 }

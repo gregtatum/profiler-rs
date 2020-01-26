@@ -9,6 +9,8 @@ pub enum SamplerThreadMessage {
     /// Each sampler is responsible for sampling a single thread. There are platform
     /// specific implementations.
     RegisterSampler(Box<dyn Sampler>),
+    /// Unregister a sampler with a given thread id.
+    UnregisterSampler(u32),
     PauseSampling,
     StartSampling,
     StopSampling,
@@ -84,7 +86,17 @@ impl SamplerThread {
                     should_sample = false;
                     match message {
                         SamplerThreadMessage::RegisterSampler(sampler) => {
+                            println!("Register sampler {}", sampler.thread_id());
                             self.samplers.push(sampler)
+                        }
+                        SamplerThreadMessage::UnregisterSampler(thread_id) => {
+                            println!("Unregister sampler {}", thread_id);
+                            // Remove the sampler from the list.
+                            self.samplers = self
+                                .samplers
+                                .drain(..)
+                                .filter(|sampler| sampler.thread_id() != thread_id)
+                                .collect();
                         }
                         SamplerThreadMessage::StopSampling => {
                             return;

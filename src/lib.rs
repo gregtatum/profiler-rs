@@ -12,5 +12,6 @@ pub mod core;
 pub mod markers;
 pub mod sampler;
 pub mod sampler_thread;
+pub mod sampler_mac;
 pub mod startup;
 pub mod time_expiring_buffer;

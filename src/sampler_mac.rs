@@ -4,7 +4,7 @@
 
 // This file is adapted from the servo project.
 
-use crate::sampler::{Address, NativeStack, Registers, Sampler};
+use crate::sampler::{Address, NativeStack, Registers, Sampler, SuspendAndSampleError};
 use libc;
 use mach;
 use std::panic;
@@ -19,17 +19,14 @@ pub struct MacOsSampler {
 
 impl MacOsSampler {
     #[allow(unsafe_code)]
-    pub fn new() -> Box<Sampler> {
-        let thread_id = unsafe { mach::mach_init::mach_thread_self() };
+    pub fn new() -> Box<dyn Sampler> {
+        let thread_id = MacOsSampler::request_thread_id();
         Box::new(MacOsSampler { thread_id })
     }
-}
 
-/// These are the various failure cases for suspending and sampling a thread.
-enum SuspendAndSampleError {
-    CouldNotSuspendThread,
-    CouldNotGetRegisters,
-    CouldNotResumeThread,
+    pub fn request_thread_id() -> MonitoredThreadId {
+        unsafe { mach::mach_init::mach_thread_self() }
+    }
 }
 
 impl Sampler for MacOsSampler {
@@ -72,7 +69,7 @@ impl Sampler for MacOsSampler {
             // should abort the process.
             if let Err(()) = resume_thread(self.thread_id) {
                 eprintln!("Unable to resume a sampled thread from the profiler.");
-                process.abort();
+                process::abort();
             }
 
             native_stack
@@ -85,6 +82,10 @@ impl Sampler for MacOsSampler {
         // -----------------------------------------------------
 
         native_stack
+    }
+
+    fn thread_id(&self) -> u32 {
+        self.thread_id
     }
 }
 
