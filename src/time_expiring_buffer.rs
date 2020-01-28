@@ -24,10 +24,13 @@ impl<T> TimeExpiringBuffer<T> {
     }
 
     pub fn push_back(&mut self, value: T) {
-        self.buffer.push_back(BufferEntry {
-            created_at: Instant::now(),
-            value,
-        });
+        self.push_back_at(value, Instant::now());
+    }
+
+    /// This method is primarily for tests, to allow for creating repeatable
+    /// tests.
+    pub fn push_back_at(&mut self, value: T, created_at: Instant) {
+        self.buffer.push_back(BufferEntry { created_at, value });
     }
 
     pub fn remove_expired(&mut self) {

@@ -65,9 +65,12 @@ impl BufferThread {
     }
 
     fn serialize_buffer(&self, profiler_start: &Instant) -> serde_json::Value {
+        let samples_serializer = SamplesSerializer::new(profiler_start, &self.samples);
         json!({
             "markers": MarkersSerializer::new(profiler_start, &self.markers),
-            "samples": SamplesSerializer::new(profiler_start, &self.samples),
+            "samples": samples_serializer.serialize_samples(),
+            "stackTable": samples_serializer.serialize_stack_table(),
+            "frameTable": samples_serializer.serialize_frame_table(),
         })
     }
 }

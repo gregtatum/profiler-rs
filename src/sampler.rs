@@ -1,6 +1,5 @@
 use crate::time_expiring_buffer::BufferEntry;
 use crate::time_expiring_buffer::TimeExpiringBuffer;
-use serde::{Serialize, Serializer};
 use serde_json::{json, Value};
 use std::time::Instant;
 
@@ -16,13 +15,6 @@ pub enum SuspendAndSampleError {
 pub struct Sample {
     pub native_stack: NativeStack,
     pub thread_id: u32,
-}
-
-impl Sample {
-    pub fn serialize(&self, profiler_start: &Instant, created_at: &Instant) -> Value {
-        let time = created_at.duration_since(*profiler_start);
-        json!({})
-    }
 }
 
 pub trait Sampler: Send {
@@ -75,6 +67,7 @@ impl NativeStack {
     }
 }
 
+#[derive(Debug)]
 pub struct StackForSerialization {
     // -1 if not present.
     prefix: Option<usize>,
@@ -83,7 +76,7 @@ pub struct StackForSerialization {
 
 type StackTable = Vec<StackForSerialization>;
 
-// This struct handles JSON serialization through an iterator interface.
+// This struct handles JSON serialization.
 pub struct SamplesSerializer<'a> {
     profiler_start: &'a Instant,
     buffer: &'a TimeExpiringBuffer<Sample>,
@@ -101,11 +94,17 @@ impl<'a> SamplesSerializer<'a> {
 
         // Build the stack table from the buffer entries.
         let mut stack_index = None;
-        for BufferEntry { value, created_at } in buffer.iter() {
+        for BufferEntry {
+            value,
+            created_at: _,
+        } in buffer.iter()
+        {
             let Sample {
                 native_stack,
                 thread_id,
             } = value;
+
+            let mut last_matching_stack_index = None;
 
             // Convert the native stack in the buffer to a StackTable. The StackTable
             // deduplicates the information already in the buffer. The StackTable is
@@ -116,7 +115,6 @@ impl<'a> SamplesSerializer<'a> {
                     // are no more stacks to convert to a stack table.
                     break;
                 }
-
                 // Attempt to find the next stack.
                 loop {
                     let stack: Option<&StackForSerialization> = match stack_index {
@@ -127,6 +125,7 @@ impl<'a> SamplesSerializer<'a> {
                     match stack {
                         Some(stack) => {
                             if *native_stack_instruction_ptr == stack.instruction_ptr {
+                                last_matching_stack_index = stack_index;
                                 // We've found the correct stack.
                                 break;
                             }
@@ -136,11 +135,12 @@ impl<'a> SamplesSerializer<'a> {
                         None => {
                             // This is the end of the stack table, add an entry here.
                             stack_table.push(StackForSerialization {
-                                prefix: stack_index,
+                                prefix: last_matching_stack_index,
                                 instruction_ptr: *native_stack_instruction_ptr,
                             });
                             // Update the stack index to the inserted entry.
                             stack_index = Some(stack_table.len() - 1);
+                            last_matching_stack_index = stack_index;
                             break;
                         }
                     }
@@ -160,15 +160,231 @@ impl<'a> SamplesSerializer<'a> {
             stack_table,
         }
     }
+
+    pub fn serialize_stack_table(&self) -> serde_json::Value {
+        // TODO - Perhaps generate these values in the target format to make this faster so
+        // that we don't have to transform the data again.
+        let prefix: Vec<i32> = self
+            .stack_table
+            .iter()
+            .map(|stack| match stack.prefix {
+                Some(value) => value as i32,
+                None => -1,
+            })
+            .collect();
+
+        let mut zeros = Vec::with_capacity(self.stack_table.len());
+        zeros.resize(self.stack_table.len(), 0);
+
+        // For now the frame table matches the stack table, so just print out the vectors.
+        let frame: Vec<usize> = self
+            .stack_table
+            .iter()
+            .enumerate()
+            .map(|(index, _)| index)
+            .collect();
+
+        json!({
+            "frame": frame,
+            "category": zeros,
+            "subcategory": zeros,
+            "prefix": prefix,
+            "length": self.stack_table.len(),
+        })
+    }
+
+    pub fn serialize_samples(&self) -> serde_json::Value {
+        let mut zeros = Vec::with_capacity(self.stack_table.len());
+        zeros.resize(self.stack_table.len(), 0);
+
+        // For now the frame table matches the stack table, so just print out the vectors.
+        let time: Vec<u64> = self
+            .buffer
+            .iter()
+            .map(|entry| {
+                entry
+                    .created_at
+                    .duration_since(*self.profiler_start)
+                    .as_millis() as u64
+            })
+            .collect();
+
+        json!({
+            "stack": self.buffer_entry_to_stack_table,
+            "time": time,
+            "length": self.buffer_entry_to_stack_table.len(),
+        })
+    }
+
+    pub fn serialize_frame_table(&self) -> serde_json::Value {
+        // TODO - Perhaps generate these values in the target format to make this faster so
+        // that we don't have to transform the data again.
+        let address: Vec<u8> = self
+            .stack_table
+            .iter()
+            .map(|stack| stack.instruction_ptr)
+            .collect();
+
+        let mut zeros = Vec::with_capacity(self.stack_table.len());
+        zeros.resize(self.stack_table.len(), 0);
+
+        let mut nulls = Vec::with_capacity(self.stack_table.len());
+        nulls.resize(self.stack_table.len(), Value::Null);
+
+        json!({
+          "address": address,
+          "category": zeros,
+          "subcategory": zeros,
+          "func": zeros,
+          "innerWindowID": nulls,
+          "implementation": nulls,
+          "line": nulls,
+          "column": nulls,
+          "optimizations": nulls,
+          "length": self.stack_table.len(),
+        })
+    }
 }
 
-impl<'a> Serialize for SamplesSerializer<'a> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.collect_seq(self.buffer.iter().map(|BufferEntry { created_at, value }| {
-            value.serialize(&self.profiler_start, created_at)
-        }))
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn add_stack_sample(stacks: &Vec<u8>) -> Sample {
+        let mut native_stack = NativeStack::new();
+        for (index, stack) in stacks.iter().enumerate() {
+            native_stack.instruction_ptrs[index] = *stack;
+        }
+        Sample {
+            native_stack: native_stack,
+            thread_id: 0,
+        }
+    }
+
+    fn create_buffer_for_tests(
+        profiler_start: &Instant,
+        test_data: Vec<Vec<u8>>,
+    ) -> TimeExpiringBuffer<Sample> {
+        let mut buffer = TimeExpiringBuffer::new(Duration::new(60, 0));
+        for (index, stacks) in test_data.iter().enumerate() {
+            buffer.push_back_at(
+                add_stack_sample(&stacks),
+                *profiler_start + Duration::from_millis(index as u64),
+            );
+        }
+        buffer
+    }
+
+    #[test]
+    fn can_create_a_stack_table() {
+        // Each entry in the test data array represents a sample. Each sample is added with
+        // an stack that is made up of instruction addresses. The instruction addresses were
+        // chosen such that the instruction address would be similar to the stack index.
+        let profiler_start = Instant::now();
+        let buffer = create_buffer_for_tests(
+            &profiler_start,
+            vec![
+                vec![0x10, 0x11, 0x12],
+                vec![0x10, 0x11, 0x12, 0x13],
+                vec![0x10, 0x11, 0x12, 0x13, 0x14],
+                vec![0x10, 0x15, 0x16],
+                vec![0x10, 0x15, 0x16, 0x17],
+                vec![0x10, 0x11, 0x12],
+            ],
+        );
+        let serializer = SamplesSerializer::new(&profiler_start, &buffer);
+        // Convert the stack table into an easy to assert tuple of form (instruction_ptr, prefix).
+        let stack_table: Vec<(u8, Option<usize>)> = serializer
+            .stack_table
+            .iter()
+            .map(|stack_for_serialization| {
+                (
+                    stack_for_serialization.instruction_ptr,
+                    stack_for_serialization.prefix,
+                )
+            })
+            .collect();
+
+        // This assertion tests that the instruction pointers are all sequential, as the test
+        // data was laid out this way. Finally, the prefixes should match the structure
+        // of the test dat.
+        assert_eq!(
+            stack_table,
+            [
+                // (instruction_ptr, prefix)
+                (0x10, None),
+                (0x11, Some(0)),
+                (0x12, Some(1)),
+                (0x13, Some(2)),
+                (0x14, Some(3)),
+                (0x15, Some(0)),
+                (0x16, Some(5)),
+                (0x17, Some(6)),
+            ],
+        );
+
+        // Each stack should point to its unique entry. Of special note: the first and last entry
+        // should point to the same stack.
+        assert_eq!(
+            serializer.buffer_entry_to_stack_table,
+            vec![2, 3, 4, 6, 7, 2]
+        );
+    }
+
+    #[test]
+    fn can_serialize_a_stack_table() {
+        // Each entry in the test data array represents a sample. Each sample is added with
+        // an stack that is made up of instruction addresses. The instruction addresses were
+        // chosen such that the instruction address would be the same as the stack index.
+        let profiler_start = Instant::now();
+        let buffer = create_buffer_for_tests(
+            &profiler_start,
+            vec![
+                vec![0x10, 0x11, 0x12],
+                vec![0x10, 0x11, 0x12, 0x13],
+                vec![0x10, 0x11, 0x12, 0x13, 0x14],
+                vec![0x10, 0x15, 0x16],
+                vec![0x10, 0x15, 0x16, 0x17],
+                vec![0x10, 0x11, 0x12],
+            ],
+        );
+        let serializer = SamplesSerializer::new(&profiler_start, &buffer);
+
+        assert_eq!(
+            serializer.serialize_stack_table(),
+            json!({
+                "frame": [0, 1, 2, 3, 4, 5, 6, 7],
+                "prefix": [-1, 0, 1, 2, 3, 0, 5, 6],
+                "category": [0, 0, 0, 0, 0, 0, 0, 0],
+                "subcategory": [0, 0, 0, 0, 0, 0, 0, 0],
+                "length": 8,
+            })
+        );
+
+        assert_eq!(
+            serializer.serialize_frame_table(),
+            json!({
+                "address": [0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17],
+                "category": [0, 0, 0, 0, 0, 0, 0, 0],
+                "subcategory": [0, 0, 0, 0, 0, 0, 0, 0],
+                "func": [0, 0, 0, 0, 0, 0, 0, 0],
+                "innerWindowID": [null, null, null, null, null, null, null, null],
+                "implementation": [null, null, null, null, null, null, null, null],
+                "line": [null, null, null, null, null, null, null, null],
+                "column": [null, null, null, null, null, null, null, null],
+                "optimizations": [null, null, null, null, null, null, null, null],
+                "length": 8,
+            })
+        );
+
+        assert_eq!(
+            serializer.serialize_samples(),
+            json!({
+                "stack": [2, 3, 4, 6, 7, 2],
+                "time": [0, 1, 2, 3, 4, 5],
+                "length": 6,
+            })
+        );
     }
 }

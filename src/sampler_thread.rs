@@ -50,7 +50,7 @@ impl SamplerThread {
     pub fn start(&mut self) {
         // Start out paused.
         let mut is_paused = true;
-        let mut should_sample = false;
+        let mut should_sample;
 
         loop {
             let unhandled_message = if is_paused {
@@ -86,11 +86,9 @@ impl SamplerThread {
                     should_sample = false;
                     match message {
                         SamplerThreadMessage::RegisterSampler(sampler) => {
-                            println!("Register sampler {}", sampler.thread_id());
                             self.samplers.push(sampler)
                         }
                         SamplerThreadMessage::UnregisterSampler(thread_id) => {
-                            println!("Unregister sampler {}", thread_id);
                             // Remove the sampler from the list.
                             self.samplers = self
                                 .samplers

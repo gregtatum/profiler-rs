@@ -84,6 +84,10 @@ impl MainThreadCore {
 /// the MainThreadCore on the main thread, and then passed into individual processes.
 ///
 /// ```
+///    use profiler::core::MainThreadCore;
+///    use std::time::Duration;
+///    use std::thread;
+///
 ///    let profiler_core = MainThreadCore::new(Duration::new(60, 0), Duration::from_millis(10));
 ///    let mut thread_registrar = profiler_core.get_thread_registrar();
 ///
@@ -207,8 +211,19 @@ mod tests {
             .join()
             .expect("Joined the thread handle for the test.");
 
-        println!("Serialization: {:?}", profiler_core.serialize().to_string());
-        // Serialization: "{\"markers\":[{\"endTime\":101,\"name\":\"Thread 1, Marker 1\",\"startTime\":101,\"type\":\"Text\"},{\"endTime\":101,\"name\":\"Thread 1, Marker 2\",\"startTime\":101,\"type\":\"Text\"},{\"endTime\":101,\"name\":\"Thread 1, Marker 3\",\"startTime\":101,\"type\":\"Text\"},{\"endTime\":200,\"name\":\"Thread 2, Marker 1\",\"startTime\":200,\"type\":\"Text\"},{\"endTime\":200,\"name\":\"Thread 2, Marker 2\",\"startTime\":200,\"type\":\"Text\"},{\"endTime\":200,\"name\":\"Thread 2, Marker 3\",\"startTime\":200,\"type\":\"Text\"}]}"
+        // This is not working due to the time value.
+        // TODO - Blank out the times to zero.
+        // assert_eq!(
+        //     profiler_core.serialize().get("markers").unwrap(),
+        //     serde_json::json!([
+        //         {"endTime": 101, "name": "Thread 1, Marker 1", "startTime": 101, "type": "Text"},
+        //         {"endTime": 101, "name": "Thread 1, Marker 2", "startTime": 101, "type": "Text"},
+        //         {"endTime": 101, "name": "Thread 1, Marker 3", "startTime": 101, "type": "Text"},
+        //         {"endTime": 203, "name": "Thread 2, Marker 1", "startTime": 203, "type": "Text"},
+        //         {"endTime": 203, "name": "Thread 2, Marker 2", "startTime": 203, "type": "Text"},
+        //         {"endTime": 203, "name": "Thread 2, Marker 3", "startTime": 203, "type": "Text"}
+        //     ]),
+        // );
     }
 
     #[test]
@@ -244,6 +259,6 @@ mod tests {
             .join()
             .expect("Joined the thread handle for the test.");
 
-        println!("Serialization: {:?}", profiler_core.serialize().to_string());
+        // println!("Serialization: {:?}", profiler_core.serialize().to_string());
     }
 }
