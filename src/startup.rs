@@ -4,14 +4,13 @@ use serde::{Deserialize, Serialize};
 use std::env;
 use std::process::Command;
 
-/**
- * This module is in charge of deciding what mode to start in. Conceptually, the ProfilerService
- * holds the buffers used for storing profiler data, while the App sends data over to the
- * ProfilerService. For now, there is only one App, and multiple ProfilerServices. In the future
- * this will change to one ProfilerService and many Apps connected to it. However, the ipc-channel
- * does not support multiple producers at this time.
- */
+/// This module is in charge of deciding what mode to start in. Conceptually, the ProfilerService
+/// holds the buffers used for storing profiler data, while the App sends data over to the
+/// ProfilerService. For now, there is only one App, and multiple ProfilerServices. In the future
+/// this will change to one ProfilerService and many Apps connected to it. However, the ipc-channel
+/// does not support multiple producers at this time.
 
+///
 pub enum StartupMode {
     ProfilerService,
     App,

@@ -9,6 +9,14 @@ use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
+/// Send a message from the buffer thread to the main thread core.
+pub enum SerializationMessage {
+    // Respond with the serialized profile.
+    Serialize(serde_json::Value),
+    // See how many samples are in the profile buffers. This is useful for testing.
+    SampleCount(usize),
+}
+
 /// The MainThreadCore is the orchestrator that coordinates the registration between multiple
 /// threads.
 pub struct MainThreadCore {
@@ -16,8 +24,8 @@ pub struct MainThreadCore {
     buffer_join_handle: thread::JoinHandle<()>,
     sampler_join_handle: thread::JoinHandle<()>,
     buffer_thread_sender: mpsc::Sender<BufferThreadMessage>,
+    serialization_receiver: mpsc::Receiver<SerializationMessage>,
     sampler_thread_sender: mpsc::Sender<SamplerThreadMessage>,
-    serialization_receiver: mpsc::Receiver<serde_json::Value>,
 }
 
 impl MainThreadCore {
@@ -69,19 +77,43 @@ impl MainThreadCore {
         }
     }
 
+    pub fn get_serialization_response(&self) -> SerializationMessage {
+        self.serialization_receiver
+            .recv()
+            .expect("Unable to receive the message from the serialization receiver.")
+    }
+
+    pub fn get_sample_count(&self) -> usize {
+        self.buffer_thread_sender
+            .send(BufferThreadMessage::GetSampleCount)
+            .expect("Unable to send a message to the buffer thread to serialize markers");
+
+        match self.get_serialization_response() {
+            SerializationMessage::SampleCount(size) => size,
+            _ => panic!("Expected to receive a message Serialize message."),
+        }
+    }
+
     pub fn serialize(&self) -> serde_json::Value {
         self.buffer_thread_sender
             .send(BufferThreadMessage::SerializeBuffer(self.start_time))
             .expect("Unable to send a message to the buffer thread to serialize markers");
 
-        self.serialization_receiver
-            .recv()
-            .expect("Unable to receive the message from the serialization receiver.")
+        match self.get_serialization_response() {
+            SerializationMessage::Serialize(profile) => profile,
+            _ => panic!("Expected to receive a message Serialize message."),
+        }
+    }
+
+    pub fn start_sampling(&self) {
+        self.sampler_thread_sender
+            .send(SamplerThreadMessage::StartSampling)
+            .expect("Unable to start the profiler");
     }
 }
 
 /// The ThreadRegistrar is responsible for the registration of a thread. It is created via
-/// the MainThreadCore on the main thread, and then passed into individual processes.
+/// the MainThreadCore on the main thread, and then passed into individual threads.
 ///
 /// ```
 ///    use profiler::core::MainThreadCore;
@@ -179,6 +211,19 @@ pub fn add_marker(marker: Box<dyn Marker + Send>) {
 mod tests {
     use super::super::markers::StaticStringMarker;
     use super::*;
+    use serde_json::{json, Value};
+
+    // Markers have real time numbers in them. This doesn't work for asserting data structures
+    // in tests. Strip them out.
+    fn set_time_values_to_zero(values: &mut Vec<Value>) {
+        for value in values.iter_mut() {
+            for value in value.as_object_mut().unwrap().values_mut() {
+                if value.is_number() {
+                    *value = json!(0);
+                }
+            }
+        }
+    }
 
     #[test]
     fn can_create_and_store_markers() {
@@ -211,19 +256,28 @@ mod tests {
             .join()
             .expect("Joined the thread handle for the test.");
 
-        // This is not working due to the time value.
-        // TODO - Blank out the times to zero.
-        // assert_eq!(
-        //     profiler_core.serialize().get("markers").unwrap(),
-        //     serde_json::json!([
-        //         {"endTime": 101, "name": "Thread 1, Marker 1", "startTime": 101, "type": "Text"},
-        //         {"endTime": 101, "name": "Thread 1, Marker 2", "startTime": 101, "type": "Text"},
-        //         {"endTime": 101, "name": "Thread 1, Marker 3", "startTime": 101, "type": "Text"},
-        //         {"endTime": 203, "name": "Thread 2, Marker 1", "startTime": 203, "type": "Text"},
-        //         {"endTime": 203, "name": "Thread 2, Marker 2", "startTime": 203, "type": "Text"},
-        //         {"endTime": 203, "name": "Thread 2, Marker 3", "startTime": 203, "type": "Text"}
-        //     ]),
-        // );
+        let mut markers: Vec<Value> = profiler_core
+            .serialize()
+            .get_mut("markers")
+            .unwrap()
+            .as_array_mut()
+            .unwrap()
+            .to_owned();
+
+        set_time_values_to_zero(&mut markers);
+        let time_value = 0;
+
+        assert_eq!(
+            json!(markers),
+            serde_json::json!([
+                {"endTime": time_value, "name": "Thread 1, Marker 1", "startTime": time_value, "type": "Text"},
+                {"endTime": time_value, "name": "Thread 1, Marker 2", "startTime": time_value, "type": "Text"},
+                {"endTime": time_value, "name": "Thread 1, Marker 3", "startTime": time_value, "type": "Text"},
+                {"endTime": time_value, "name": "Thread 2, Marker 1", "startTime": time_value, "type": "Text"},
+                {"endTime": time_value, "name": "Thread 2, Marker 2", "startTime": time_value, "type": "Text"},
+                {"endTime": time_value, "name": "Thread 2, Marker 3", "startTime": time_value, "type": "Text"}
+            ]),
+        );
     }
 
     #[test]
@@ -237,7 +291,7 @@ mod tests {
         // Create a shared reference to signal to the threads to shut down.
         let do_shutdown_threads = Arc::new(AtomicBool::new(false));
 
-        let thread_handle1 = {
+        let thread_handle = {
             let mut thread_registrar = profiler_core.get_thread_registrar();
             let do_shutdown_threads = do_shutdown_threads.clone();
 
@@ -252,13 +306,52 @@ mod tests {
             })
         };
 
+        profiler_core.start_sampling();
+
+        loop {
+            if profiler_core.get_sample_count() > 0 {
+                break;
+            }
+        }
+
         // Signal to the threads that it's time to shut down.
         do_shutdown_threads.store(true, Ordering::Relaxed);
 
-        thread_handle1
+        thread_handle
             .join()
             .expect("Joined the thread handle for the test.");
 
-        // println!("Serialization: {:?}", profiler_core.serialize().to_string());
+        // TODO - Write a better assertion for this.
+
+        // println!("Serialization: {:#?}", profiler_core.serialize());
+        // assert_eq!(
+        //     profiler_core.serialize(),
+        //     json!({
+        //         "frameTable": {
+        //             "address":[],
+        //             "category":[],
+        //             "column":[],
+        //             "func":[],
+        //             "implementation":[],
+        //             "innerWindowID":[],
+        //             "length":0,"line":[],
+        //             "optimizations":[],
+        //             "subcategory":[]
+        //         },
+        //         "markers":[],
+        //         "samples":{
+        //             "stack":[],
+        //             "time":[],
+        //             "length":0,
+        //         },
+        //         "stackTable": {
+        //             "category":[],
+        //             "frame":[],
+        //             "prefix":[],
+        //             "subcategory":[],
+        //             "length":0,
+        //         }
+        //     })
+        // )
     }
 }

@@ -1,3 +1,4 @@
+use super::core::SerializationMessage;
 use super::markers::{Marker, MarkersSerializer};
 use super::time_expiring_buffer::TimeExpiringBuffer;
 use crate::sampler::{Sample, SamplesSerializer};
@@ -14,13 +15,14 @@ pub enum BufferThreadMessage {
     AddSample(Sample),
     ClearExpiredMarkers,
     SerializeBuffer(Instant),
+    GetSampleCount,
 }
 
 /// The BufferThread represents a thread for handling messages that need to be stored in the
 /// profiler buffer. It contains storage for
 pub struct BufferThread {
     receiver: mpsc::Receiver<BufferThreadMessage>,
-    serialization_sender: mpsc::Sender<serde_json::Value>,
+    serialization_sender: mpsc::Sender<SerializationMessage>,
     markers: TimeExpiringBuffer<Box<dyn Marker + Send>>,
     samples: TimeExpiringBuffer<Sample>,
 }
@@ -29,7 +31,7 @@ impl BufferThread {
     pub fn new(
         receiver: mpsc::Receiver<BufferThreadMessage>,
         entry_lifetime: Duration,
-        serialization_sender: mpsc::Sender<serde_json::Value>,
+        serialization_sender: mpsc::Sender<SerializationMessage>,
     ) -> BufferThread {
         BufferThread {
             receiver,
@@ -54,7 +56,14 @@ impl BufferThread {
                 }
                 Ok(BufferThreadMessage::SerializeBuffer(profiler_start)) => {
                     self.serialization_sender
-                        .send(self.serialize_buffer(&profiler_start))
+                        .send(SerializationMessage::Serialize(
+                            self.serialize_buffer(&profiler_start),
+                        ))
+                        .unwrap();
+                }
+                Ok(BufferThreadMessage::GetSampleCount) => {
+                    self.serialization_sender
+                        .send(SerializationMessage::SampleCount(self.samples.len()))
                         .unwrap();
                 }
                 Err(_) => {
