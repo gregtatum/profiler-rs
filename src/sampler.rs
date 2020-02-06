@@ -1,5 +1,6 @@
 use crate::time_expiring_buffer::BufferEntry;
 use crate::time_expiring_buffer::TimeExpiringBuffer;
+use serde::ser::{Serialize, Serializer};
 use serde_json::{json, Value};
 use std::time::Instant;
 
@@ -38,13 +39,48 @@ pub struct Registers {
     pub frame_ptr: StackMemoryOffset,
 }
 
-/// TODO - This should be an opaque type that is a `*mut core::ffi::c_void` under the hood.
-/// Right now, just using the c_void type creates a memory saftey issue when passing it across
-/// threads. Really, there is no safety issue, as we only care about the value of the memory
-/// address, not what it points to.
+/// This is an opaque type that refers to a memory address in a given process. Under the hood
+/// it uses the c_void pointer type, but it only uses it to store the memory address, never
+/// to actually access the value. Accessing the memory would be an unsafe operation. Hence we
+/// can safely implement the Send trait for this struct.
 ///
 /// See: https://doc.rust-lang.org/nomicon/ffi.html#representing-opaque-structs
-pub type ProcessMemoryAddress = u64;
+#[derive(Debug, PartialEq, Clone, Copy)]
+#[repr(C)]
+pub struct ProcessMemoryAddress {
+    /// Important! Never access what this points to. It should serve as an opaque type.
+    value: *mut core::ffi::c_void,
+}
+
+impl ProcessMemoryAddress {
+    fn new(value: *mut core::ffi::c_void) -> ProcessMemoryAddress {
+        ProcessMemoryAddress { value: value }
+    }
+
+    fn null() -> ProcessMemoryAddress {
+        ProcessMemoryAddress {
+            value: std::ptr::null_mut(),
+        }
+    }
+
+    fn is_null(&self) -> bool {
+        self.value.is_null()
+    }
+}
+
+/// This unsafe should be fine, as we only store the value of the memory address, but do not
+/// access it.
+unsafe impl Send for ProcessMemoryAddress {}
+
+/// Implement serialization for serde, which casts the value to a u64.
+impl Serialize for ProcessMemoryAddress {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_u64(self.value as u64)
+    }
+}
 
 /// The NativeStack represents how we store the information about the current stack. The Registers
 /// struct contains the offset into the stack memory space, while this struct contains the offsets
@@ -58,8 +94,8 @@ pub struct NativeStack {
 impl NativeStack {
     pub fn new() -> Self {
         NativeStack {
-            instruction_ptrs: [0; MAX_NATIVE_FRAMES],
-            stack_ptrs: [0; MAX_NATIVE_FRAMES],
+            instruction_ptrs: [ProcessMemoryAddress::null(); MAX_NATIVE_FRAMES],
+            stack_ptrs: [ProcessMemoryAddress::null(); MAX_NATIVE_FRAMES],
             count: 0,
         }
     }
@@ -72,8 +108,8 @@ impl NativeStack {
         if !(self.count < MAX_NATIVE_FRAMES) {
             return Err(());
         }
-        self.instruction_ptrs[self.count] = instruction_ptr as ProcessMemoryAddress;
-        self.stack_ptrs[self.count] = stack_ptr as ProcessMemoryAddress;
+        self.instruction_ptrs[self.count] = ProcessMemoryAddress::new(instruction_ptr);
+        self.stack_ptrs[self.count] = ProcessMemoryAddress::new(stack_ptr);
         self.count = self.count + 1;
         Ok(())
     }
@@ -122,7 +158,7 @@ impl<'a> SamplesSerializer<'a> {
             // deduplicates the information already in the buffer. The StackTable is
             // well ordered, in that a leaf stack will always be after a root stack.
             for native_stack_instruction_ptr in native_stack.instruction_ptrs.iter() {
-                if *native_stack_instruction_ptr == 0 {
+                if native_stack_instruction_ptr.is_null() {
                     // A 0 in the native stack signals a nullptr, which means that there
                     // are no more stacks to convert to a stack table.
                     break;
@@ -231,7 +267,7 @@ impl<'a> SamplesSerializer<'a> {
     pub fn serialize_frame_table(&self) -> serde_json::Value {
         // TODO - Perhaps generate these values in the target format to make this faster so
         // that we don't have to transform the data again.
-        let address: Vec<u64> = self
+        let address: Vec<ProcessMemoryAddress> = self
             .stack_table
             .iter()
             .map(|stack| stack.instruction_ptr)
@@ -266,7 +302,8 @@ mod tests {
     fn add_stack_sample(stacks: &Vec<u8>) -> Sample {
         let mut native_stack = NativeStack::new();
         for (index, stack) in stacks.iter().enumerate() {
-            native_stack.instruction_ptrs[index] = *stack as u64;
+            native_stack.instruction_ptrs[index] =
+                ProcessMemoryAddress::new(*stack as *mut std::ffi::c_void);
         }
         Sample {
             native_stack: native_stack,
@@ -318,6 +355,11 @@ mod tests {
             })
             .collect();
 
+        // A simple test helper to coerce the value correctly.
+        fn from_u8(value: u8) -> ProcessMemoryAddress {
+            ProcessMemoryAddress::new(value as *mut std::ffi::c_void)
+        }
+
         // This assertion tests that the instruction pointers are all sequential, as the test
         // data was laid out this way. Finally, the prefixes should match the structure
         // of the test dat.
@@ -325,14 +367,14 @@ mod tests {
             stack_table,
             [
                 // (instruction_ptr, prefix)
-                (0x10, None),
-                (0x11, Some(0)),
-                (0x12, Some(1)),
-                (0x13, Some(2)),
-                (0x14, Some(3)),
-                (0x15, Some(0)),
-                (0x16, Some(5)),
-                (0x17, Some(6)),
+                (from_u8(0x10), None),
+                (from_u8(0x11), Some(0)),
+                (from_u8(0x12), Some(1)),
+                (from_u8(0x13), Some(2)),
+                (from_u8(0x14), Some(3)),
+                (from_u8(0x15), Some(0)),
+                (from_u8(0x16), Some(5)),
+                (from_u8(0x17), Some(6)),
             ],
         );
 

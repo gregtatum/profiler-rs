@@ -322,7 +322,6 @@ mod tests {
             .expect("Joined the thread handle for the test.");
 
         // TODO - Write a better assertion for this.
-
         // println!("Serialization: {:#?}", profiler_core.serialize());
         // assert_eq!(
         //     profiler_core.serialize(),
