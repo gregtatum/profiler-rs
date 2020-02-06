@@ -22,24 +22,36 @@ pub trait Sampler: Send {
     fn thread_id(&self) -> u32;
 }
 
-// Several types in this file are currently not used in a Linux or Windows build.
-#[allow(dead_code)]
-pub type Address = *const u8;
+/// This type alias represents a memory offset stored in the register. It is a u8, since it only
+/// represents an offset into the stack address space. When stackwalking, this gets converted to
+/// a full memory address, which for now we're storing as a u64 regardless
+/// of the underlying memory size.
+pub type StackMemoryOffset = *const u8;
 
-/// The registers used for stack unwinding
-#[allow(dead_code)]
+/// The relevant offsets into the stack that are currently in the register.
 pub struct Registers {
     /// Instruction pointer.
-    pub instruction_ptr: Address,
+    pub instruction_ptr: StackMemoryOffset,
     /// Stack pointer.
-    pub stack_ptr: Address,
+    pub stack_ptr: StackMemoryOffset,
     /// Frame pointer.
-    pub frame_ptr: Address,
+    pub frame_ptr: StackMemoryOffset,
 }
 
+/// TODO - This should be an opaque type that is a `*mut core::ffi::c_void` under the hood.
+/// Right now, just using the c_void type creates a memory saftey issue when passing it across
+/// threads. Really, there is no safety issue, as we only care about the value of the memory
+/// address, not what it points to.
+///
+/// See: https://doc.rust-lang.org/nomicon/ffi.html#representing-opaque-structs
+pub type ProcessMemoryAddress = u64;
+
+/// The NativeStack represents how we store the information about the current stack. The Registers
+/// struct contains the offset into the stack memory space, while this struct contains the offsets
+/// for the current process's memory space. Hence the offset size will be much larger than u8.
 pub struct NativeStack {
-    instruction_ptrs: [u8; MAX_NATIVE_FRAMES],
-    stack_ptrs: [u8; MAX_NATIVE_FRAMES],
+    instruction_ptrs: [ProcessMemoryAddress; MAX_NATIVE_FRAMES],
+    stack_ptrs: [ProcessMemoryAddress; MAX_NATIVE_FRAMES],
     count: usize,
 }
 
@@ -60,8 +72,8 @@ impl NativeStack {
         if !(self.count < MAX_NATIVE_FRAMES) {
             return Err(());
         }
-        self.instruction_ptrs[self.count] = instruction_ptr as u8;
-        self.stack_ptrs[self.count] = stack_ptr as u8;
+        self.instruction_ptrs[self.count] = instruction_ptr as ProcessMemoryAddress;
+        self.stack_ptrs[self.count] = stack_ptr as ProcessMemoryAddress;
         self.count = self.count + 1;
         Ok(())
     }
@@ -71,7 +83,7 @@ impl NativeStack {
 pub struct StackForSerialization {
     // -1 if not present.
     prefix: Option<usize>,
-    instruction_ptr: u8,
+    instruction_ptr: ProcessMemoryAddress,
 }
 
 type StackTable = Vec<StackForSerialization>;
@@ -219,7 +231,7 @@ impl<'a> SamplesSerializer<'a> {
     pub fn serialize_frame_table(&self) -> serde_json::Value {
         // TODO - Perhaps generate these values in the target format to make this faster so
         // that we don't have to transform the data again.
-        let address: Vec<u8> = self
+        let address: Vec<u64> = self
             .stack_table
             .iter()
             .map(|stack| stack.instruction_ptr)
@@ -254,7 +266,7 @@ mod tests {
     fn add_stack_sample(stacks: &Vec<u8>) -> Sample {
         let mut native_stack = NativeStack::new();
         for (index, stack) in stacks.iter().enumerate() {
-            native_stack.instruction_ptrs[index] = *stack;
+            native_stack.instruction_ptrs[index] = *stack as u64;
         }
         Sample {
             native_stack: native_stack,
@@ -295,7 +307,7 @@ mod tests {
         );
         let serializer = SamplesSerializer::new(&profiler_start, &buffer);
         // Convert the stack table into an easy to assert tuple of form (instruction_ptr, prefix).
-        let stack_table: Vec<(u8, Option<usize>)> = serializer
+        let stack_table: Vec<(ProcessMemoryAddress, Option<usize>)> = serializer
             .stack_table
             .iter()
             .map(|stack_for_serialization| {

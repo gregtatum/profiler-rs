@@ -4,7 +4,7 @@
 
 // This file is adapted from the servo project.
 
-use crate::sampler::{Address, NativeStack, Registers, Sampler, SuspendAndSampleError};
+use crate::sampler::{NativeStack, Registers, Sampler, StackMemoryOffset, SuspendAndSampleError};
 use libc;
 use mach;
 use std::panic;
@@ -118,9 +118,9 @@ unsafe fn get_registers(thread_id: MonitoredThreadId) -> Result<Registers, ()> {
     );
     check_kern_return(kret)?;
     Ok(Registers {
-        instruction_ptr: state.__rip as Address,
-        stack_ptr: state.__rsp as Address,
-        frame_ptr: state.__rbp as Address,
+        instruction_ptr: state.__rip as StackMemoryOffset,
+        stack_ptr: state.__rsp as StackMemoryOffset,
+        frame_ptr: state.__rbp as StackMemoryOffset,
     })
 }
 
