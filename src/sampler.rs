@@ -149,7 +149,8 @@ impl<'a> SamplesSerializer<'a> {
         {
             let Sample {
                 native_stack,
-                thread_id,
+                // TODO - The entries need to be read once for each thread.
+                thread_id: _,
             } = value;
 
             let mut last_matching_stack_index = None;

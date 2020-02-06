@@ -40,7 +40,8 @@ impl Sampler for MacOsSampler {
 
         // First, don't let panic do its thing.
         // TODO - I'm not sure why this is here, as I dropped it in from the Servo code.
-        // Perhaps they break the flow of the logic or perhaps they allocate?
+        // Perhaps a panic would break the flow of logic, or more likely, it would try
+        // to create a heap allocation or take a lock, causing a deadlock.
         let current_hook = panic::take_hook();
         panic::set_hook(Box::new(|_| {
             // Avoiding any allocation or locking as part of standard panicking.
@@ -209,7 +210,10 @@ unsafe fn critical_frame_pointer_stack_walk(registers: Registers) -> NativeStack
             // TODO - I believe in 64 bit systems this should be 8-byte aligned and use 0b111.
             (next_fp as usize & 0b11 != 0)
         {
-            // TODO - Panic here?
+            // TODO - It would be nice to know if we failed here because of something crazy,
+            // or if just because we reached the end of the stack. We can't panic, because
+            // the hook is not set. This error could be bubbled up and handled outside
+            // of the critical section. I'd prefer to be stricter here.
             break;
         }
 
