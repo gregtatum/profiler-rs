@@ -100,7 +100,7 @@ impl NativeStack {
         }
     }
 
-    pub fn process_register(
+    pub fn add_register_to_stack(
         &mut self,
         instruction_ptr: *mut std::ffi::c_void,
         stack_ptr: *mut std::ffi::c_void,
@@ -153,6 +153,9 @@ impl<'a> SamplesSerializer<'a> {
             } = value;
 
             let mut last_matching_stack_index = None;
+
+            // TODO - This loop needs to be reveresed. The leaf most functions are at the
+            // beginning of the native stack.
 
             // Convert the native stack in the buffer to a StackTable. The StackTable
             // deduplicates the information already in the buffer. The StackTable is

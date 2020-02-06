@@ -18,7 +18,6 @@ pub struct MacOsSampler {
 }
 
 impl MacOsSampler {
-    #[allow(unsafe_code)]
     pub fn new() -> Box<dyn Sampler> {
         let thread_id = MacOsSampler::request_thread_id();
         Box::new(MacOsSampler { thread_id })
@@ -30,7 +29,6 @@ impl MacOsSampler {
 }
 
 impl Sampler for MacOsSampler {
-    #[allow(unsafe_code)]
     fn suspend_and_sample_thread(&self) -> Result<NativeStack, SuspendAndSampleError> {
         // -----------------------------------------------------
         // WARNING: The "critical section" begins here.
@@ -58,10 +56,10 @@ impl Sampler for MacOsSampler {
             };
 
             // Attempt to get the registers, and perform a stackwalk. Suspension
-            // could be fallible, while frame_pointer_stack_walk() always returns
+            // could be fallible, while critical_frame_pointer_stack_walk() always returns
             // a result.
             let native_stack = match get_registers(self.thread_id) {
-                Ok(regs) => Ok(frame_pointer_stack_walk(regs)),
+                Ok(registers) => Ok(critical_frame_pointer_stack_walk(registers)),
                 Err(()) => Err(SuspendAndSampleError::CouldNotGetRegisters),
             };
 
@@ -90,33 +88,34 @@ impl Sampler for MacOsSampler {
 }
 
 /// Convert a kernel response code into a Rust friendly value.
-fn check_kern_return(kret: mach::kern_return::kern_return_t) -> Result<(), ()> {
-    if kret != mach::kern_return::KERN_SUCCESS {
+fn check_kern_return(kern_return: mach::kern_return::kern_return_t) -> Result<(), ()> {
+    if kern_return != mach::kern_return::KERN_SUCCESS {
         return Err(());
     }
     Ok(())
 }
 
 /// Send a signal to suspend the thread at the given ID.
-#[allow(unsafe_code)]
 unsafe fn suspend_thread(thread_id: MonitoredThreadId) -> Result<(), ()> {
     check_kern_return(mach::thread_act::thread_suspend(thread_id))
 }
 
 /// Call the kernel to get the current registers.
-#[allow(unsafe_code)]
 unsafe fn get_registers(thread_id: MonitoredThreadId) -> Result<Registers, ()> {
-    // This holds the result of the
+    // These hold the results of the system calls.
     let mut state = mach::structs::x86_thread_state64_t::new();
     let mut state_count = mach::structs::x86_thread_state64_t::count();
 
-    let kret = mach::thread_act::thread_get_state(
+    let kern_return = mach::thread_act::thread_get_state(
         thread_id,
         mach::thread_status::x86_THREAD_STATE64,
         (&mut state) as *mut _ as *mut _,
         &mut state_count,
     );
-    check_kern_return(kret)?;
+
+    check_kern_return(kern_return)?;
+
+    // We got the registers, convert them into Rust-friendly values.
     Ok(Registers {
         instruction_ptr: state.__rip as StackMemoryOffset,
         stack_ptr: state.__rsp as StackMemoryOffset,
@@ -125,45 +124,97 @@ unsafe fn get_registers(thread_id: MonitoredThreadId) -> Result<Registers, ()> {
 }
 
 /// This function wraps the system call to resume into a Rust-friendly type.
-#[allow(unsafe_code)]
 unsafe fn resume_thread(thread_id: MonitoredThreadId) -> Result<(), ()> {
     check_kern_return(mach::thread_act::thread_resume(thread_id))
 }
 
-#[allow(unsafe_code)]
-unsafe fn frame_pointer_stack_walk(regs: Registers) -> NativeStack {
-    // Note: this function will only work with code build with:
-    // --dev,
-    // or --with-frame-pointer.
-
+/// /!\ WARNING /!\
+/// Do not heap allocate during this function! This function is called in the critical section
+/// of when a thread is suspended. This function assumes that the build is using frame
+/// pointers, e.g. `RUSTFLAGS="-Cforce-frame-pointers=yes" cargo build`
+unsafe fn critical_frame_pointer_stack_walk(registers: Registers) -> NativeStack {
+    // Perform system calls to get the necessary information about the stack.
+    // TODO - This code is assuming that it is operating on a 64 bit mac, hence moving
+    // 8 bytes every step when computing the stack_address_max. This should use a bit
+    // length-agnostic solution instead.
     let pthread_t = libc::pthread_self();
-    let stackaddr = libc::pthread_get_stackaddr_np(pthread_t);
     let stacksize = libc::pthread_get_stacksize_np(pthread_t);
+    let stack_address_min = libc::pthread_get_stackaddr_np(pthread_t);
+    let stack_address_max = stack_address_min.add(stacksize * 8);
+
     let mut native_stack = NativeStack::new();
-    let pc = regs.instruction_ptr as *mut std::ffi::c_void;
-    let stack = regs.stack_ptr as *mut std::ffi::c_void;
-    let _ = native_stack.process_register(pc, stack);
-    let mut current = regs.frame_ptr as *mut *mut std::ffi::c_void;
-    while !current.is_null() {
-        if (current as usize) < stackaddr as usize {
+
+    // Frame pointers point to the next frame pointer. Note the two *mut values.
+    type RecursivePointer = *mut *mut std::ffi::c_void;
+
+    let _ = native_stack.add_register_to_stack(
+        registers.instruction_ptr as *mut std::ffi::c_void,
+        registers.stack_ptr as *mut std::ffi::c_void,
+    );
+
+    // Example memory layout of the stack:
+    //
+    //                   start of stack
+    //                   -----------------------------------------
+    //  root-most frame: | 0x990 | ...............................
+    //                   | ..... |
+    //       |           | ..... |
+    //     stack         | 0x550 | ... other frame information ...
+    //     grows         | 0x548 | ... other frame information ...
+    //      down         | 0x540 | stack pointer ???
+    //       |           | 0x538 | instruction pointer "0x3858745"
+    //       v           | 0x530 | frame pointer "0x628" (points to the next frame ^)
+    //                   | ..... |
+    // leaf-most frame:  | 0x430 | ... other frame information ...
+    //                   | 0x428 | ... other frame information ...
+    //                   | 0x420 | stack pointer ???
+    //                   | 0x418 | instruction pointer "0x4246693"
+    //                   | 0x410 | frame pointer "0x530" (points to the next frame ^)
+    //                   -----------------------------------------
+    //                   end of the stack
+
+    // Walk the stack.
+    let mut current_fp = registers.frame_ptr as RecursivePointer;
+    while !current_fp.is_null() {
+        if (current_fp as usize) < stack_address_min as usize {
             // Reached the end of the stack.
             break;
         }
-        if current as usize >= stackaddr.add(stacksize * 8) as usize {
+
+        if current_fp as usize >= stack_address_max as usize {
             // Reached the beginning of the stack.
-            // Assumining 64 bit mac(see the stacksize * 8).
             break;
         }
-        let next = *current as *mut *mut std::ffi::c_void;
-        let pc = current.add(1);
-        let stack = current.add(2);
-        if let Err(()) = native_stack.process_register(*pc, *stack) {
+
+        // Continue recursing into the frame pointers.
+        let next_fp = *current_fp as RecursivePointer;
+
+        // Offset the pointer by 1 and 2 respectively, looking up the next values inside
+        // the frame's memory.
+        let instruction_ptr = current_fp.add(1);
+        let stack_ptr = current_fp.add(2);
+
+        if let Err(()) = native_stack.add_register_to_stack(*instruction_ptr, *stack_ptr) {
+            // The NativeStack struct is full. Quit stackwalking.
             break;
         }
-        if (next <= current) || (next as usize & 3 != 0) {
+
+        // Sanity check the stack walking.
+        if
+        // The next frame pointer must be higher than the current, or else we walked
+        // into some unknown territory. See the memory diagram above for an explanation.
+        (next_fp <= current_fp) ||
+            // The next frame pointer is not 4-byte aligned. This means that stack walking failed
+            // and is not where it should be.
+            // TODO - I believe in 64 bit systems this should be 8-byte aligned and use 0b111.
+            (next_fp as usize & 0b11 != 0)
+        {
+            // TODO - Panic here?
             break;
         }
-        current = next;
+
+        // Continue onto the next frame pointer.
+        current_fp = next_fp;
     }
     native_stack
 }

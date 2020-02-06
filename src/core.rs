@@ -323,6 +323,22 @@ mod tests {
 
         // TODO - Write a better assertion for this.
         // println!("Serialization: {:#?}", profiler_core.serialize());
+
+        // {
+        //     let addresses: Vec<u64> = profiler_core
+        //         .serialize()
+        //         .get("frameTable")
+        //         .unwrap()
+        //         .get("address")
+        //         .unwrap()
+        //         .as_array()
+        //         .unwrap()
+        //         .iter()
+        //         .map(|value| value.as_u64().unwrap())
+        //         .collect();
+        //     println!("Serialization: {:#x?}", addresses);
+        // }
+
         // assert_eq!(
         //     profiler_core.serialize(),
         //     json!({
