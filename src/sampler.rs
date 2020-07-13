@@ -231,11 +231,11 @@ impl<'a> SamplesSerializer<'a> {
             // Convert the native stack in the buffer to a StackTable. The StackTable
             // deduplicates the information already in the buffer. The StackTable is
             // well ordered, in that a leaf stack will always be after a root stack.
-            for native_stack_instruction_ptr in native_stack.instruction_ptrs.iter() {
+            for native_stack_instruction_ptr in native_stack.instruction_ptrs.iter().rev() {
                 if native_stack_instruction_ptr.is_null() {
-                    // A 0 in the native stack signals a nullptr, which means that there
-                    // are no more stacks to convert to a stack table.
-                    break;
+                    // A 0 in the native stack signals a nullptr, which means that this
+                    // loop has not yet gotten to the root-most stack.
+                    continue;
                 }
                 // Attempt to find the next stack.
                 loop {
