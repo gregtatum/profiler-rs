@@ -1,7 +1,7 @@
 use super::core::SerializationMessage;
 use super::markers::{Marker, MarkersSerializer};
 use super::time_expiring_buffer::TimeExpiringBuffer;
-use crate::sampler::{Sample, SamplesSerializer};
+use crate::sampler::{Sample, SamplesSerializer, StringTable};
 use serde_json;
 use serde_json::json;
 use std::sync::mpsc;
@@ -75,11 +75,13 @@ impl BufferThread {
 
     fn serialize_buffer(&self, profiler_start: &Instant) -> serde_json::Value {
         let samples_serializer = SamplesSerializer::new(profiler_start, &self.samples);
+        let mut string_table = StringTable::new();
         json!({
             "markers": MarkersSerializer::new(profiler_start, &self.markers),
             "samples": samples_serializer.serialize_samples(),
             "stackTable": samples_serializer.serialize_stack_table(),
-            "frameTable": samples_serializer.serialize_frame_table(),
+            "frameTable": samples_serializer.serialize_frame_table(&mut string_table),
+            "stringTable": string_table.serialize(),
         })
     }
 }

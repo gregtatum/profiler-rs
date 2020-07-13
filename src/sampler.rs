@@ -2,6 +2,7 @@ use crate::time_expiring_buffer::BufferEntry;
 use crate::time_expiring_buffer::TimeExpiringBuffer;
 use serde::ser::{Serialize, Serializer};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::time::Instant;
 
 const MAX_NATIVE_FRAMES: usize = 1024;
@@ -66,6 +67,10 @@ impl ProcessMemoryAddress {
     fn is_null(&self) -> bool {
         self.value.is_null()
     }
+
+    fn as_string(&self) -> String {
+        format!("0x{:x}", self.value as u64)
+    }
 }
 
 /// This unsafe should be fine, as we only store the value of the memory address, but do not
@@ -79,6 +84,43 @@ impl Serialize for ProcessMemoryAddress {
         S: Serializer,
     {
         serializer.serialize_u64(self.value as u64)
+    }
+}
+
+/// This StringTable is used for serializing strings in the JSON format.
+/// It includes utilities to put things into the string table during
+/// serialization, as well as a serializer for itself.
+///
+/// TODO - This could be made more memory friendly with some trickery.
+/// See https://matklad.github.io/2020/03/22/fast-simple-rust-interner.html
+#[derive(Debug)]
+pub struct StringTable {
+    string_to_index: HashMap<String, usize>,
+    strings: Vec<String>,
+}
+
+impl StringTable {
+    pub fn new() -> StringTable {
+        StringTable {
+            strings: Vec::new(),
+            string_to_index: HashMap::new(),
+        }
+    }
+
+    pub fn get_index(&mut self, string: String) -> usize {
+        match self.string_to_index.get(&string) {
+            Some(index) => return *index,
+            None => {
+                let index = self.strings.len();
+                self.string_to_index.insert(string.to_owned(), index);
+                self.strings.push(string);
+                return index;
+            }
+        }
+    }
+
+    pub fn serialize(&self) -> serde_json::Value {
+        json!(self.strings)
     }
 }
 
@@ -268,33 +310,33 @@ impl<'a> SamplesSerializer<'a> {
         })
     }
 
-    pub fn serialize_frame_table(&self) -> serde_json::Value {
-        // TODO - Perhaps generate these values in the target format to make this faster so
-        // that we don't have to transform the data again.
-        let address: Vec<ProcessMemoryAddress> = self
-            .stack_table
-            .iter()
-            .map(|stack| stack.instruction_ptr)
-            .collect();
-
-        // TODO - Can these be done lazily with iterators?
-        let mut zeros = Vec::with_capacity(self.stack_table.len());
-        zeros.resize(self.stack_table.len(), 0);
-
-        let mut nulls = Vec::with_capacity(self.stack_table.len());
-        nulls.resize(self.stack_table.len(), Value::Null);
-
+    pub fn serialize_frame_table(&self, string_table: &mut StringTable) -> serde_json::Value {
+        // https://github.com/firefox-devtools/profiler/blob/04d81d51ed394827bff9c22e540993abeff1db5e/src/types/gecko-profile.js#L104
         json!({
-          "address": address,
-          "category": zeros,
-          "subcategory": zeros,
-          "func": zeros,
-          "innerWindowID": nulls,
-          "implementation": nulls,
-          "line": nulls,
-          "column": nulls,
-          "optimizations": nulls,
-          "length": self.stack_table.len(),
+            "schema": {
+                "location": 0,
+                "relevantForJS": 1,
+                "innerWindowID": 2,
+                "implementation": 3,
+                "line": 4,
+                "column": 5,
+                "category": 6,
+                "subcategory": 7,
+            },
+            "data": self
+                .stack_table
+                .iter()
+                .map(|stack| json!([
+                    string_table.get_index(stack.instruction_ptr.as_string()), // location
+                    false, // relevantForJS
+                    null, // innerWindowID
+                    null, // implementation
+                    null, // line
+                    null, // column
+                    null, // category
+                    null, // subcategory
+                ]))
+                .collect::<serde_json::Value>()
         })
     }
 }
@@ -409,6 +451,7 @@ mod tests {
             ],
         );
         let serializer = SamplesSerializer::new(&profiler_start, &buffer);
+        let mut string_table = StringTable::new();
 
         assert_eq!(
             serializer.serialize_stack_table(),
@@ -421,19 +464,29 @@ mod tests {
             })
         );
 
-        assert_eq!(
-            serializer.serialize_frame_table(),
+        assert_equal!(
+            serializer.serialize_frame_table(&mut string_table),
             json!({
-                "address": [0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17],
-                "category": [0, 0, 0, 0, 0, 0, 0, 0],
-                "subcategory": [0, 0, 0, 0, 0, 0, 0, 0],
-                "func": [0, 0, 0, 0, 0, 0, 0, 0],
-                "innerWindowID": [null, null, null, null, null, null, null, null],
-                "implementation": [null, null, null, null, null, null, null, null],
-                "line": [null, null, null, null, null, null, null, null],
-                "column": [null, null, null, null, null, null, null, null],
-                "optimizations": [null, null, null, null, null, null, null, null],
-                "length": 8,
+                "schema": {
+                    "location": 0,
+                    "relevantForJS": 1,
+                    "innerWindowID": 2,
+                    "implementation": 3,
+                    "line": 4,
+                    "column": 5,
+                    "category": 6,
+                    "subcategory": 7,
+                },
+                "data": [
+                    [string_table.get_index("0x10".to_string()), false, null, null, null, null, null, null],
+                    [string_table.get_index("0x11".to_string()), false, null, null, null, null, null, null],
+                    [string_table.get_index("0x12".to_string()), false, null, null, null, null, null, null],
+                    [string_table.get_index("0x13".to_string()), false, null, null, null, null, null, null],
+                    [string_table.get_index("0x14".to_string()), false, null, null, null, null, null, null],
+                    [string_table.get_index("0x15".to_string()), false, null, null, null, null, null, null],
+                    [string_table.get_index("0x16".to_string()), false, null, null, null, null, null, null],
+                    [string_table.get_index("0x17".to_string()), false, null, null, null, null, null, null],
+                ],
             })
         );
 
