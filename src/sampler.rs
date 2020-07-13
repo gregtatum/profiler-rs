@@ -256,34 +256,26 @@ impl<'a> SamplesSerializer<'a> {
     }
 
     pub fn serialize_stack_table(&self) -> serde_json::Value {
-        // TODO - Perhaps generate these values in the target format to make this faster so
-        // that we don't have to transform the data again.
-        let prefix: Vec<i32> = self
-            .stack_table
-            .iter()
-            .map(|stack| match stack.prefix {
-                Some(value) => value as i32,
-                None => -1,
-            })
-            .collect();
-
-        let mut zeros = Vec::with_capacity(self.stack_table.len());
-        zeros.resize(self.stack_table.len(), 0);
-
-        // For now the frame table matches the stack table, so just print out the vectors.
-        let frame: Vec<usize> = self
-            .stack_table
-            .iter()
-            .enumerate()
-            .map(|(index, _)| index)
-            .collect();
-
+        // https://github.com/firefox-devtools/profiler/blob/04d81d51ed394827bff9c22e540993abeff1db5e/src/types/gecko-profile.js#L156
         json!({
-            "frame": frame,
-            "category": zeros,
-            "subcategory": zeros,
-            "prefix": prefix,
-            "length": self.stack_table.len(),
+            "schema": {
+                "prefix": 0,
+                "frame": 1,
+            },
+            "data": self
+                .stack_table
+                .iter()
+                .enumerate()
+                .map(|(index, stack)| {
+                    let prefix = match stack.prefix {
+                        Some(value) => value as i32,
+                        None => -1,
+                    };
+                    // For now the frame table matches the stack table, so just print out
+                    // the vectors.
+                    json!([prefix, index])
+                })
+                .collect::<serde_json::Value>()
         })
     }
 
@@ -456,11 +448,20 @@ mod tests {
         assert_equal!(
             serializer.serialize_stack_table(),
             json!({
-                "frame": [0, 1, 2, 3, 4, 5, 6, 7],
-                "prefix": [-1, 0, 1, 2, 3, 0, 5, 6],
-                "category": [0, 0, 0, 0, 0, 0, 0, 0],
-                "subcategory": [0, 0, 0, 0, 0, 0, 0, 0],
-                "length": 8,
+                "schema": {
+                    "prefix": 0,
+                    "frame": 1,
+                },
+                "data": [
+                    [-1, 0],
+                    [0, 1],
+                    [1, 2],
+                    [2, 3],
+                    [3, 4],
+                    [0, 5],
+                    [5, 6],
+                    [6, 7],
+                ],
             })
         );
 
