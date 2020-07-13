@@ -491,6 +491,11 @@ mod tests {
         );
 
         assert_equal!(
+            string_table.serialize(),
+            json!(["0x10", "0x11", "0x12", "0x13", "0x14", "0x15", "0x16", "0x17",])
+        );
+
+        assert_equal!(
             serializer.serialize_samples(),
             json!({
                 "stack": [2, 3, 4, 6, 7, 2],
