@@ -107,7 +107,9 @@ impl StringTable {
         }
     }
 
-    pub fn get_index(&mut self, string: String) -> usize {
+    /// Take ownership of a string, this method makes one less copy of the
+    /// the string.
+    pub fn take_string(&mut self, string: String) -> usize {
         match self.string_to_index.get(&string) {
             Some(index) => return *index,
             None => {
@@ -119,8 +121,34 @@ impl StringTable {
         }
     }
 
+    /// This turns a string reference into an index, or returns one if it
+    /// already exists. This involves two string copies.
+    pub fn get_index(&mut self, string: &str) -> usize {
+        match self.string_to_index.get(string) {
+            Some(index) => return *index,
+            None => {
+                let index = self.strings.len();
+                self.string_to_index.insert(string.to_owned(), index);
+                self.strings.push(string.to_owned());
+                return index;
+            }
+        }
+    }
+
     pub fn serialize(&self) -> serde_json::Value {
         json!(self.strings)
+    }
+
+    pub fn from_json(json: &Vec<serde_json::Value>) -> StringTable {
+        let mut string_table = StringTable::new();
+        for value in json {
+            string_table.get_index(
+                value
+                    .as_str()
+                    .expect("extracting a string to the string table"),
+            );
+        }
+        string_table
     }
 }
 
@@ -322,7 +350,7 @@ impl<'a> SamplesSerializer<'a> {
                 .stack_table
                 .iter()
                 .map(|stack| json!([
-                    string_table.get_index(stack.instruction_ptr.as_string()), // location
+                    string_table.take_string(stack.instruction_ptr.as_string()), // location
                     false, // relevantForJS
                     null, // innerWindowID
                     null, // implementation
@@ -482,14 +510,14 @@ mod tests {
                     "subcategory": 7,
                 },
                 "data": [
-                    [string_table.get_index("0x10".to_string()), false, null, null, null, null, null, null],
-                    [string_table.get_index("0x11".to_string()), false, null, null, null, null, null, null],
-                    [string_table.get_index("0x12".to_string()), false, null, null, null, null, null, null],
-                    [string_table.get_index("0x13".to_string()), false, null, null, null, null, null, null],
-                    [string_table.get_index("0x14".to_string()), false, null, null, null, null, null, null],
-                    [string_table.get_index("0x15".to_string()), false, null, null, null, null, null, null],
-                    [string_table.get_index("0x16".to_string()), false, null, null, null, null, null, null],
-                    [string_table.get_index("0x17".to_string()), false, null, null, null, null, null, null],
+                    [string_table.get_index("0x10"), false, null, null, null, null, null, null],
+                    [string_table.get_index("0x11"), false, null, null, null, null, null, null],
+                    [string_table.get_index("0x12"), false, null, null, null, null, null, null],
+                    [string_table.get_index("0x13"), false, null, null, null, null, null, null],
+                    [string_table.get_index("0x14"), false, null, null, null, null, null, null],
+                    [string_table.get_index("0x15"), false, null, null, null, null, null, null],
+                    [string_table.get_index("0x16"), false, null, null, null, null, null, null],
+                    [string_table.get_index("0x17"), false, null, null, null, null, null, null],
                 ],
             })
         );

@@ -1,5 +1,5 @@
 use super::core::SerializationMessage;
-use super::markers::{Marker, MarkersSerializer};
+use super::markers::{serialize_markers_in_buffer, Marker};
 use super::time_expiring_buffer::TimeExpiringBuffer;
 use crate::sampler::{Sample, SamplesSerializer, StringTable};
 use serde_json;
@@ -116,8 +116,18 @@ impl BufferThread {
                 "product": "Rust Profiler",
             },
             // TODO - Actually output threads.
+            // https://github.com/firefox-devtools/profiler/blob/04d81d51ed394827bff9c22e540993abeff1db5e/src/types/gecko-profile.js#L170
             "threads": [{
-                "markers": MarkersSerializer::new(&core_info.start_time, &self.markers),
+                // TODO - Fill out these properties.
+                "name": "Thread",
+                "registerTime": 0,
+                "processType": "default",
+                "unregisterTime": serde_json::Value::Null,
+                "tid": 0,
+                "pid": 0,
+                // These should be complete:
+                "markers": serialize_markers_in_buffer(
+                    &self.markers, &core_info.start_time, &mut string_table),
                 "samples": samples_serializer.serialize_samples(),
                 "stackTable": samples_serializer.serialize_stack_table(),
                 "frameTable": samples_serializer.serialize_frame_table(&mut string_table),

@@ -235,18 +235,38 @@ pub fn add_marker(marker: Box<dyn Marker + Send>) {
 
 #[cfg(test)]
 mod tests {
-    use super::super::markers::StaticStringMarker;
     use super::*;
-    use serde_json::{json, Value};
+    use crate::markers::StaticStringMarker;
+    use crate::sampler::StringTable;
+    use serde_json::{json, Map, Value};
+
+    type MarkersTable = Map<String, Value>;
 
     // Markers have real time numbers in them. This doesn't work for asserting data structures
     // in tests. Strip them out.
-    fn set_time_values_to_zero(values: &mut Vec<Value>) {
-        for value in values.iter_mut() {
-            for value in value.as_object_mut().unwrap().values_mut() {
-                if value.is_number() {
-                    *value = json!(0);
-                }
+    fn set_time_values_to_zero(markers_table: &mut MarkersTable) {
+        let time_index = markers_table
+            .get("schema")
+            .expect("found marker schema")
+            .as_object()
+            .expect("marker schema is an object")
+            .get("time")
+            .expect("got name from marker schema")
+            .as_u64()
+            .expect("name index is a number");
+
+        let tuples = markers_table
+            .get_mut("data")
+            .expect("got data from markers table")
+            .as_array_mut()
+            .expect("marker data is an array");
+
+        for value in tuples.iter_mut() {
+            let time = value
+                .get_mut(time_index as usize)
+                .expect("got a value from the tuple");
+            if time.is_number() {
+                *time = json!(0);
             }
         }
     }
@@ -282,38 +302,52 @@ mod tests {
             .join()
             .expect("Joined the thread handle for the test.");
 
-        let mut markers: Vec<Value> = profiler_core
+        let mut thread = profiler_core
             .serialize()
             // Access threads.
             .get_mut("threads")
-            .unwrap()
+            .expect("found threads")
             .as_array_mut()
-            .unwrap()
+            .expect("threads are an array")
             // Get the first thread.
             .get_mut(0)
-            .unwrap()
+            .expect("found the first thread")
             .as_object_mut()
-            .unwrap()
+            .expect("the thread is an object")
+            .to_owned();
+
+        let mut markers: MarkersTable = thread
             // Now get the markers out of the array.
             .get_mut("markers")
-            .unwrap()
-            .as_array_mut()
-            .unwrap()
+            .expect("found markers")
+            .as_object_mut()
+            .expect("markers are an object")
             .to_owned();
 
         set_time_values_to_zero(&mut markers);
         let time_value = 0;
 
+        let mut string_table = StringTable::from_json(
+            thread
+                .get("stringTable")
+                .expect("got string table from thread")
+                .as_array()
+                .expect("the string table is an array"),
+        );
+
         assert_equal!(
             json!(markers),
-            serde_json::json!([
-                {"endTime": time_value, "name": "Thread 1, Marker 1", "startTime": time_value, "type": "Text"},
-                {"endTime": time_value, "name": "Thread 1, Marker 2", "startTime": time_value, "type": "Text"},
-                {"endTime": time_value, "name": "Thread 1, Marker 3", "startTime": time_value, "type": "Text"},
-                {"endTime": time_value, "name": "Thread 2, Marker 1", "startTime": time_value, "type": "Text"},
-                {"endTime": time_value, "name": "Thread 2, Marker 2", "startTime": time_value, "type": "Text"},
-                {"endTime": time_value, "name": "Thread 2, Marker 3", "startTime": time_value, "type": "Text"}
-            ])
+            serde_json::json!({
+                "schema": { "name": 0, "time": 1, "category": 2, "data": 3 },
+                "data": [
+                    [string_table.get_index("Thread 1, Marker 1"), time_value, 0],
+                    [string_table.get_index("Thread 1, Marker 2"), time_value, 0],
+                    [string_table.get_index("Thread 1, Marker 3"), time_value, 0],
+                    [string_table.get_index("Thread 2, Marker 1"), time_value, 0],
+                    [string_table.get_index("Thread 2, Marker 2"), time_value, 0],
+                    [string_table.get_index("Thread 2, Marker 3"), time_value, 0],
+                ]
+            })
         );
     }
 
