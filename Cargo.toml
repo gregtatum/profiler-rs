@@ -18,3 +18,8 @@ ipc-channel = "0.12.2"
 # Only include mach on certain systems.
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies.mach]
 version = "0.3"
+
+# The following are used in tests.
+[dev-dependencies]
+num-bigint = "0.3.0"
+num-traits = "0.2.12"
