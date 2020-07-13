@@ -7,6 +7,11 @@ use serde_json::json;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+pub struct CoreInfoForSerialization {
+    pub start_time: Instant,
+    pub sampling_interval: u64,
+}
+
 /// This enum collects all of the different types of messages that we can send to the buffer
 /// thread. The buffer thread is the end point of a multiple producer, single consumer (mpsc)
 /// channel, and this enum is how we communicate with it.
@@ -14,7 +19,7 @@ pub enum BufferThreadMessage {
     AddMarker(Box<dyn Marker + Send>),
     AddSample(Sample),
     ClearExpiredMarkers,
-    SerializeBuffer(Instant),
+    SerializeBuffer(CoreInfoForSerialization),
     GetSampleCount,
     // This message is used primarily for testing, so we can know that one sample
     // has happened.
@@ -64,10 +69,10 @@ impl BufferThread {
                 Ok(BufferThreadMessage::ClearExpiredMarkers) => {
                     self.markers.remove_expired();
                 }
-                Ok(BufferThreadMessage::SerializeBuffer(profiler_start)) => {
+                Ok(BufferThreadMessage::SerializeBuffer(core_info)) => {
                     self.serialization_sender
                         .send(SerializationMessage::Serialize(
-                            self.serialize_buffer(&profiler_start),
+                            self.serialize_buffer(&core_info),
                         ))
                         .unwrap();
                 }
@@ -86,15 +91,38 @@ impl BufferThread {
         }
     }
 
-    fn serialize_buffer(&self, profiler_start: &Instant) -> serde_json::Value {
-        let samples_serializer = SamplesSerializer::new(profiler_start, &self.samples);
+    fn serialize_buffer(&self, core_info: &CoreInfoForSerialization) -> serde_json::Value {
+        let samples_serializer = SamplesSerializer::new(&core_info.start_time, &self.samples);
         let mut string_table = StringTable::new();
         json!({
-            "markers": MarkersSerializer::new(profiler_start, &self.markers),
-            "samples": samples_serializer.serialize_samples(),
-            "stackTable": samples_serializer.serialize_stack_table(),
-            "frameTable": samples_serializer.serialize_frame_table(&mut string_table),
-            "stringTable": string_table.serialize(),
+            // https://github.com/firefox-devtools/profiler/blob/04d81d51ed394827bff9c22e540993abeff1db5e/src/types/gecko-profile.js#L244
+            "meta": {
+                // https://github.com/firefox-devtools/profiler/blob/04d81d51ed394827bff9c22e540993abeff1db5e/src/app-logic/constants.js#L8
+                "version": 19,
+                "startTime": 0,
+                "shutdownTime": serde_json::Value::Null,
+                // https://github.com/firefox-devtools/profiler/blob/04d81d51ed394827bff9c22e540993abeff1db5e/src/profile-logic/data-structures.js
+                "categories": [
+                    { "name": "Idle", "color": "transparent", "subcategories": ["Other"] },
+                    { "name": "Other", "color": "grey", "subcategories": ["Other"] },
+                    { "name": "Layout", "color": "purple", "subcategories": ["Other"] },
+                    { "name": "JavaScript", "color": "yellow", "subcategories": ["Other"] },
+                    { "name": "GC / CC", "color": "orange", "subcategories": ["Other"] },
+                    { "name": "Network", "color": "lightblue", "subcategories": ["Other"] },
+                    { "name": "Graphics", "color": "green", "subcategories": ["Other"] },
+                    { "name": "DOM", "color": "blue", "subcategories": ["Other"] },
+                ],
+                "interval": core_info.sampling_interval,
+                "product": "Rust Profiler",
+            },
+            // TODO - Actually output threads.
+            "threads": [{
+                "markers": MarkersSerializer::new(&core_info.start_time, &self.markers),
+                "samples": samples_serializer.serialize_samples(),
+                "stackTable": samples_serializer.serialize_stack_table(),
+                "frameTable": samples_serializer.serialize_frame_table(&mut string_table),
+                "stringTable": string_table.serialize(),
+            }]
         })
     }
 }

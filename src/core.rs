@@ -1,4 +1,4 @@
-use crate::buffer_thread::{BufferThread, BufferThreadMessage};
+use crate::buffer_thread::{BufferThread, BufferThreadMessage, CoreInfoForSerialization};
 use crate::markers::Marker;
 use crate::sampler_mac::MacOsSampler;
 use crate::sampler_thread::{SamplerThread, SamplerThreadMessage};
@@ -24,6 +24,7 @@ pub enum SerializationMessage {
 /// threads.
 pub struct MainThreadCore {
     start_time: Instant,
+    sampling_interval: Duration,
     buffer_join_handle: thread::JoinHandle<()>,
     sampler_join_handle: thread::JoinHandle<()>,
     buffer_thread_sender: mpsc::Sender<BufferThreadMessage>,
@@ -70,6 +71,7 @@ impl MainThreadCore {
             buffer_thread_sender,
             sampler_thread_sender,
             serialization_receiver,
+            sampling_interval,
         }
     }
 
@@ -99,7 +101,12 @@ impl MainThreadCore {
 
     pub fn serialize(&self) -> serde_json::Value {
         self.buffer_thread_sender
-            .send(BufferThreadMessage::SerializeBuffer(self.start_time))
+            .send(BufferThreadMessage::SerializeBuffer(
+                CoreInfoForSerialization {
+                    start_time: self.start_time,
+                    sampling_interval: self.sampling_interval.as_millis() as u64,
+                },
+            ))
             .expect("Unable to send a message to the buffer thread to serialize markers");
 
         match self.get_serialization_response() {
@@ -277,6 +284,17 @@ mod tests {
 
         let mut markers: Vec<Value> = profiler_core
             .serialize()
+            // Access threads.
+            .get_mut("threads")
+            .unwrap()
+            .as_array_mut()
+            .unwrap()
+            // Get the first thread.
+            .get_mut(0)
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            // Now get the markers out of the array.
             .get_mut("markers")
             .unwrap()
             .as_array_mut()
