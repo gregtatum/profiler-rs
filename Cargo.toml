@@ -13,6 +13,7 @@ serde_json = "1.0.39"
 serde = { version = "1.0.91", features = ["derive"] }
 log = "0.4.8"
 pretty_env_logger = "0.3.1"
+static_assertions = "1.1.0"
 ipc-channel = "0.12.2"
 # Only include mach on certain systems.
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies.mach]

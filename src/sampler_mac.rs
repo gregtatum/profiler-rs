@@ -7,6 +7,7 @@
 use crate::sampler::{NativeStack, Registers, Sampler, StackMemoryOffset, SuspendAndSampleError};
 use libc;
 use mach;
+use std::mem;
 use std::panic;
 use std::process;
 
@@ -135,12 +136,12 @@ unsafe fn resume_thread(thread_id: MonitoredThreadId) -> Result<(), ()> {
 /// pointers, e.g. `RUSTFLAGS="-Cforce-frame-pointers=yes" cargo build`
 unsafe fn critical_frame_pointer_stack_walk(registers: Registers) -> NativeStack {
     // Perform system calls to get the necessary information about the stack.
-    // TODO - This code is assuming that it is operating on a 64 bit mac, hence moving
-    // 8 bytes every step when computing the stack_address_max. This should use a bit
-    // length-agnostic solution instead.
     let pthread_t = libc::pthread_self();
     let stacksize = libc::pthread_get_stacksize_np(pthread_t);
     let stack_address_min = libc::pthread_get_stackaddr_np(pthread_t);
+
+    // This code assumes 8 byte sized pointers.
+    const_assert_eq!(mem::size_of::<*const core::ffi::c_void>(), 8);
     let stack_address_max = stack_address_min.add(stacksize * 8);
 
     let mut native_stack = NativeStack::new();
