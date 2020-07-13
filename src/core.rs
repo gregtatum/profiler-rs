@@ -17,6 +17,11 @@ pub enum SerializationMessage {
     SampleCount(usize),
 }
 
+// This message is sent from the Sample thread to the core thread.
+pub enum CoreThreadMessage {
+    OneSampleTaken,
+}
+
 /// The MainThreadCore is the orchestrator that coordinates the registration between multiple
 /// threads.
 pub struct MainThreadCore {
@@ -26,6 +31,7 @@ pub struct MainThreadCore {
     buffer_thread_sender: mpsc::Sender<BufferThreadMessage>,
     serialization_receiver: mpsc::Receiver<SerializationMessage>,
     sampler_thread_sender: mpsc::Sender<SamplerThreadMessage>,
+    core_receiver: mpsc::Receiver<CoreThreadMessage>,
 }
 
 impl MainThreadCore {
@@ -33,6 +39,7 @@ impl MainThreadCore {
         let (buffer_thread_sender, buffer_thread_receiver) = mpsc::channel();
         let (sampler_thread_sender, sampler_thread_receiver) = mpsc::channel();
         let (serialization_sender, serialization_receiver) = mpsc::channel();
+        let (core_sender, core_receiver) = mpsc::channel();
 
         let buffer_join_handle =
             thread::Builder::new()
@@ -54,6 +61,7 @@ impl MainThreadCore {
                     let mut sampler_thread = SamplerThread::new(
                         sampler_thread_receiver,
                         buffer_thread_sender2,
+                        core_sender,
                         sampling_interval,
                     );
                     sampler_thread.start();
@@ -67,6 +75,7 @@ impl MainThreadCore {
             buffer_thread_sender,
             sampler_thread_sender,
             serialization_receiver,
+            core_receiver,
         }
     }
 
@@ -109,6 +118,18 @@ impl MainThreadCore {
         self.sampler_thread_sender
             .send(SamplerThreadMessage::StartSampling)
             .expect("Unable to start the profiler");
+    }
+
+    /// In testing, it can be nice to deterministically know when a sample has been
+    /// taken. This function waits for that one sample to be taken.
+    pub fn wait_for_one_sample(&self) {
+        self.sampler_thread_sender
+            .send(SamplerThreadMessage::WaitingForOneSample)
+            .unwrap();
+
+        match self.core_receiver.recv().unwrap() {
+            CoreThreadMessage::OneSampleTaken => return,
+        }
     }
 }
 
@@ -307,12 +328,12 @@ mod tests {
         };
 
         profiler_core.start_sampling();
+        profiler_core.wait_for_one_sample();
 
-        loop {
-            if profiler_core.get_sample_count() > 0 {
-                break;
-            }
-        }
+        assert!(
+            profiler_core.get_sample_count() > 0,
+            "At least one sample was taken"
+        );
 
         // Signal to the threads that it's time to shut down.
         do_shutdown_threads.store(true, Ordering::Relaxed);
