@@ -277,6 +277,7 @@ impl<'a> SamplesSerializer<'a> {
             .map(|stack| stack.instruction_ptr)
             .collect();
 
+        // TODO - Can these be done lazily with iterators?
         let mut zeros = Vec::with_capacity(self.stack_table.len());
         zeros.resize(self.stack_table.len(), 0);
 
