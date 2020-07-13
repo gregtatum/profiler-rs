@@ -7,6 +7,8 @@ extern crate log;
 extern crate serde;
 #[macro_use]
 extern crate static_assertions;
+#[macro_use]
+extern crate k9;
 
 pub mod buffer_thread;
 pub mod core;
