@@ -280,25 +280,28 @@ impl<'a> SamplesSerializer<'a> {
     }
 
     pub fn serialize_samples(&self) -> serde_json::Value {
-        let mut zeros = Vec::with_capacity(self.stack_table.len());
-        zeros.resize(self.stack_table.len(), 0);
-
-        // For now the frame table matches the stack table, so just print out the vectors.
-        let time: Vec<u64> = self
-            .buffer
-            .iter()
-            .map(|entry| {
-                entry
-                    .created_at
-                    .duration_since(*self.profiler_start)
-                    .as_millis() as u64
-            })
-            .collect();
-
+        // https://github.com/firefox-devtools/profiler/blob/04d81d51ed394827bff9c22e540993abeff1db5e/src/types/gecko-profile.js#L61
         json!({
-            "stack": self.buffer_entry_to_stack_table,
-            "time": time,
-            "length": self.buffer_entry_to_stack_table.len(),
+            "schema": {
+                "stack": 0,
+                "time": 1,
+                "responsiveness": 2,
+            },
+            "data": self
+                .buffer
+                .iter()
+                .enumerate()
+                .map(|(index, entry)| {
+                    let time = entry
+                        .created_at
+                        .duration_since(*self.profiler_start)
+                        .as_millis() as u64;
+                    let stack = self.buffer_entry_to_stack_table
+                        .get(index)
+                        .expect("Unable to convert a buffer entry to the stack table.");
+                    json!([stack, time, 0])
+                })
+                .collect::<serde_json::Value>()
         })
     }
 
@@ -499,9 +502,19 @@ mod tests {
         assert_equal!(
             serializer.serialize_samples(),
             json!({
-                "stack": [2, 3, 4, 6, 7, 2],
-                "time": [0, 1, 2, 3, 4, 5],
-                "length": 6,
+                "schema": {
+                    "stack": 0,
+                    "time": 1,
+                    "responsiveness": 2,
+                },
+                "data": [
+                    [2, 0, 0],
+                    [3, 1, 0],
+                    [4, 2, 0],
+                    [6, 3, 0],
+                    [7, 4, 0],
+                    [2, 5, 0]
+                ]
             })
         );
     }
