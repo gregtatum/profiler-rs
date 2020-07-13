@@ -296,8 +296,8 @@ impl<'a> SamplesSerializer<'a> {
                 .enumerate()
                 .map(|(index, stack)| {
                     let prefix = match stack.prefix {
-                        Some(value) => value as i32,
-                        None => -1,
+                        Some(value) => json!(value),
+                        None => serde_json::Value::Null,
                     };
                     // For now the frame table matches the stack table, so just print out
                     // the vectors.
@@ -356,7 +356,7 @@ impl<'a> SamplesSerializer<'a> {
                     null, // implementation
                     null, // line
                     null, // column
-                    null, // category
+                    0, // category
                     null, // subcategory
                 ]))
                 .collect::<serde_json::Value>()

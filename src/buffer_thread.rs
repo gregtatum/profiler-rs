@@ -103,8 +103,8 @@ impl BufferThread {
                 "shutdownTime": serde_json::Value::Null,
                 // https://github.com/firefox-devtools/profiler/blob/04d81d51ed394827bff9c22e540993abeff1db5e/src/profile-logic/data-structures.js
                 "categories": [
-                    { "name": "Idle", "color": "transparent", "subcategories": ["Other"] },
                     { "name": "Other", "color": "grey", "subcategories": ["Other"] },
+                    { "name": "Idle", "color": "transparent", "subcategories": ["Other"] },
                     { "name": "Layout", "color": "purple", "subcategories": ["Other"] },
                     { "name": "JavaScript", "color": "yellow", "subcategories": ["Other"] },
                     { "name": "GC / CC", "color": "orange", "subcategories": ["Other"] },
@@ -115,6 +115,9 @@ impl BufferThread {
                 "interval": core_info.sampling_interval,
                 "product": "Rust Profiler",
             },
+            "libs": [],
+            "pausedRanges": [],
+            "processes": [],
             // TODO - Actually output threads.
             // https://github.com/firefox-devtools/profiler/blob/04d81d51ed394827bff9c22e540993abeff1db5e/src/types/gecko-profile.js#L170
             "threads": [{
