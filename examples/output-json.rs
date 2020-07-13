@@ -38,25 +38,25 @@ fn main() {
   };
 
   profiler_core.start_sampling();
-  for _ in 0..5 {
+  for _ in 0..100 {
     profiler_core.wait_for_one_sample();
   }
-  println!("Samples: {}", profiler_core.get_sample_count());
 
   // Signal to the threads that it's time to shut down.
   do_shutdown_threads.store(true, Ordering::Relaxed);
-
   thread_handle.join().expect("Joined the thread handle.");
 
+  println!("Samples collected: {}", profiler_core.get_sample_count());
   println!("Serializing profile");
   let json = profiler_core.serialize();
 
   println!("Writing serde to file");
+  let path = "examples/profile.json";
   serde_json::to_writer(
     &File::create("examples/profile.json").expect("Unable to create a file to output the JSON."),
     &json,
   )
   .expect("Unable to write the JSON to a file.");
 
-  println!("Serialization: {:?}", json);
+  println!("Profile output to: {}", path);
 }
