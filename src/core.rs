@@ -288,7 +288,7 @@ mod tests {
         set_time_values_to_zero(&mut markers);
         let time_value = 0;
 
-        assert_eq!(
+        assert_equal!(
             json!(markers),
             serde_json::json!([
                 {"endTime": time_value, "name": "Thread 1, Marker 1", "startTime": time_value, "type": "Text"},
@@ -297,7 +297,7 @@ mod tests {
                 {"endTime": time_value, "name": "Thread 2, Marker 1", "startTime": time_value, "type": "Text"},
                 {"endTime": time_value, "name": "Thread 2, Marker 2", "startTime": time_value, "type": "Text"},
                 {"endTime": time_value, "name": "Thread 2, Marker 3", "startTime": time_value, "type": "Text"}
-            ]),
+            ])
         );
     }
 
@@ -360,7 +360,7 @@ mod tests {
         //     println!("Serialization: {:#x?}", addresses);
         // }
 
-        // assert_eq!(
+        // assert_equal!(
         //     profiler_core.serialize(),
         //     json!({
         //         "frameTable": {

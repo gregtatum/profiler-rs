@@ -69,7 +69,7 @@ mod tests {
         let one_ms = Duration::new(0, 100000);
         let mut time_expiring_buffer = TimeExpiringBuffer::new(one_ms);
         time_expiring_buffer.push_back(Box::new(StaticStringMarker::new("Marker 1")));
-        assert_eq!(
+        assert_equal!(
             time_expiring_buffer.buffer.len(),
             1,
             "All of the markers are in the buffer."
@@ -82,7 +82,7 @@ mod tests {
         time_expiring_buffer.push_back(Box::new(StaticStringMarker::new("Marker 3")));
         time_expiring_buffer.remove_expired();
 
-        assert_eq!(
+        assert_equal!(
             time_expiring_buffer.buffer.len(),
             2,
             "Two of the expired markers were expunged."

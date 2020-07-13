@@ -7,6 +7,8 @@ extern crate log;
 extern crate serde;
 #[macro_use]
 extern crate static_assertions;
+
+#[allow(unused_imports)]
 #[macro_use]
 extern crate k9;
 

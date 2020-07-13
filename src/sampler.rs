@@ -1,7 +1,7 @@
 use crate::time_expiring_buffer::BufferEntry;
 use crate::time_expiring_buffer::TimeExpiringBuffer;
 use serde::ser::{Serialize, Serializer};
-use serde_json::{json, Value};
+use serde_json::json;
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -427,7 +427,7 @@ mod tests {
 
         // Each stack should point to its unique entry. Of special note: the first and last entry
         // should point to the same stack.
-        assert_eq!(
+        assert_equal!(
             serializer.buffer_entry_to_stack_table,
             vec![2, 3, 4, 6, 7, 2]
         );
@@ -453,7 +453,7 @@ mod tests {
         let serializer = SamplesSerializer::new(&profiler_start, &buffer);
         let mut string_table = StringTable::new();
 
-        assert_eq!(
+        assert_equal!(
             serializer.serialize_stack_table(),
             json!({
                 "frame": [0, 1, 2, 3, 4, 5, 6, 7],
@@ -490,7 +490,7 @@ mod tests {
             })
         );
 
-        assert_eq!(
+        assert_equal!(
             serializer.serialize_samples(),
             json!({
                 "stack": [2, 3, 4, 6, 7, 2],
