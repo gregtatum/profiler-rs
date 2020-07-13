@@ -10,16 +10,14 @@ use std::time::Duration;
 use std::time::Instant;
 
 /// Send a message from the buffer thread to the main thread core.
+#[derive(Debug)]
 pub enum SerializationMessage {
     // Respond with the serialized profile.
     Serialize(serde_json::Value),
     // See how many samples are in the profile buffers. This is useful for testing.
     SampleCount(usize),
-}
-
-// This message is sent from the Sample thread to the core thread.
-pub enum CoreThreadMessage {
-    OneSampleTaken,
+    // Notify the core that at least one sample was received. This is useful for testing.
+    OneSampleReceived,
 }
 
 /// The MainThreadCore is the orchestrator that coordinates the registration between multiple
@@ -31,7 +29,6 @@ pub struct MainThreadCore {
     buffer_thread_sender: mpsc::Sender<BufferThreadMessage>,
     serialization_receiver: mpsc::Receiver<SerializationMessage>,
     sampler_thread_sender: mpsc::Sender<SamplerThreadMessage>,
-    core_receiver: mpsc::Receiver<CoreThreadMessage>,
 }
 
 impl MainThreadCore {
@@ -39,7 +36,6 @@ impl MainThreadCore {
         let (buffer_thread_sender, buffer_thread_receiver) = mpsc::channel();
         let (sampler_thread_sender, sampler_thread_receiver) = mpsc::channel();
         let (serialization_sender, serialization_receiver) = mpsc::channel();
-        let (core_sender, core_receiver) = mpsc::channel();
 
         let buffer_join_handle =
             thread::Builder::new()
@@ -61,7 +57,6 @@ impl MainThreadCore {
                     let mut sampler_thread = SamplerThread::new(
                         sampler_thread_receiver,
                         buffer_thread_sender2,
-                        core_sender,
                         sampling_interval,
                     );
                     sampler_thread.start();
@@ -75,7 +70,6 @@ impl MainThreadCore {
             buffer_thread_sender,
             sampler_thread_sender,
             serialization_receiver,
-            core_receiver,
         }
     }
 
@@ -123,12 +117,16 @@ impl MainThreadCore {
     /// In testing, it can be nice to deterministically know when a sample has been
     /// taken. This function waits for that one sample to be taken.
     pub fn wait_for_one_sample(&self) {
-        self.sampler_thread_sender
-            .send(SamplerThreadMessage::WaitingForOneSample)
-            .unwrap();
+        self.buffer_thread_sender
+            .send(BufferThreadMessage::WaitingForOneSample)
+            .expect("Unable to send a message to the buffer thread to wait for a sample");
 
-        match self.core_receiver.recv().unwrap() {
-            CoreThreadMessage::OneSampleTaken => return,
+        match self.get_serialization_response() {
+            SerializationMessage::OneSampleReceived => return,
+            message => panic!(
+                "Received an out of order serialization message, {:#?}",
+                message
+            ),
         }
     }
 }

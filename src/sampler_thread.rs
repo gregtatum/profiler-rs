@@ -2,7 +2,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 use crate::buffer_thread::BufferThreadMessage;
-use crate::core::CoreThreadMessage;
 use crate::sampler::{Sample, Sampler};
 use std::sync::mpsc;
 use std::thread;
@@ -18,9 +17,6 @@ pub enum SamplerThreadMessage {
     PauseSampling,
     StartSampling,
     StopSampling,
-    // This message is used primarily for testing, so we can know that one sample
-    // has happened.
-    WaitingForOneSample,
 }
 
 /**
@@ -31,7 +27,6 @@ pub enum SamplerThreadMessage {
 pub struct SamplerThread {
     receiver: mpsc::Receiver<SamplerThreadMessage>,
     to_buffer_thread: mpsc::Sender<BufferThreadMessage>,
-    to_core: mpsc::Sender<CoreThreadMessage>,
     interval: Duration,
     samplers: Vec<Box<dyn Sampler>>,
 }
@@ -44,13 +39,11 @@ impl SamplerThread {
     pub fn new(
         receiver: mpsc::Receiver<SamplerThreadMessage>,
         to_buffer_thread: mpsc::Sender<BufferThreadMessage>,
-        to_core: mpsc::Sender<CoreThreadMessage>,
         interval: Duration,
     ) -> SamplerThread {
         SamplerThread {
             receiver,
             to_buffer_thread,
-            to_core,
             interval,
             samplers: Vec::new(),
         }
@@ -60,7 +53,6 @@ impl SamplerThread {
     pub fn start(&mut self) {
         // Start out paused.
         let mut is_paused = true;
-        let mut is_waiting_for_one_sample = false;
         let mut should_sample;
 
         loop {
@@ -117,9 +109,6 @@ impl SamplerThread {
                         SamplerThreadMessage::StartSampling => {
                             is_paused = false;
                         }
-                        SamplerThreadMessage::WaitingForOneSample => {
-                            is_waiting_for_one_sample = true;
-                        }
                     }
                 }
                 None => {
@@ -145,13 +134,6 @@ impl SamplerThread {
                     }
                     Err(_) => {}
                 }
-            }
-
-            if is_waiting_for_one_sample {
-                is_waiting_for_one_sample = false;
-                self.to_core
-                    .send(CoreThreadMessage::OneSampleTaken)
-                    .expect("Unable to send a message to the core thread from the sampler.");
             }
 
             // Wait for the duration.

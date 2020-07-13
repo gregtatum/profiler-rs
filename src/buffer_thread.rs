@@ -16,6 +16,9 @@ pub enum BufferThreadMessage {
     ClearExpiredMarkers,
     SerializeBuffer(Instant),
     GetSampleCount,
+    // This message is used primarily for testing, so we can know that one sample
+    // has happened.
+    WaitingForOneSample,
 }
 
 /// The BufferThread represents a thread for handling messages that need to be stored in the
@@ -43,6 +46,7 @@ impl BufferThread {
 
     /// This method runs the loop to handle messages.
     pub fn start(&mut self) {
+        let mut is_waiting_for_one_sample = false;
         loop {
             match self.receiver.recv() {
                 Ok(BufferThreadMessage::AddMarker(marker)) => {
@@ -50,6 +54,12 @@ impl BufferThread {
                 }
                 Ok(BufferThreadMessage::AddSample(sample)) => {
                     self.samples.push_back(sample);
+                    if is_waiting_for_one_sample {
+                        is_waiting_for_one_sample = false;
+                        self.serialization_sender
+                            .send(SerializationMessage::OneSampleReceived)
+                            .unwrap();
+                    }
                 }
                 Ok(BufferThreadMessage::ClearExpiredMarkers) => {
                     self.markers.remove_expired();
@@ -65,6 +75,9 @@ impl BufferThread {
                     self.serialization_sender
                         .send(SerializationMessage::SampleCount(self.samples.len()))
                         .unwrap();
+                }
+                Ok(BufferThreadMessage::WaitingForOneSample) => {
+                    is_waiting_for_one_sample = true;
                 }
                 Err(_) => {
                     break;
