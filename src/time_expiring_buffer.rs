@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 pub struct BufferEntry<T> {
+    pub tid: u32,
     pub created_at: Instant,
     pub value: T,
 }
@@ -23,14 +24,18 @@ impl<T> TimeExpiringBuffer<T> {
         }
     }
 
-    pub fn push_back(&mut self, value: T) {
-        self.push_back_at(value, Instant::now());
+    pub fn push_back(&mut self, tid: u32, value: T) {
+        self.push_back_at(value, Instant::now(), tid);
     }
 
     /// This method is primarily for tests, to allow for creating repeatable
     /// tests.
-    pub fn push_back_at(&mut self, value: T, created_at: Instant) {
-        self.buffer.push_back(BufferEntry { created_at, value });
+    pub fn push_back_at(&mut self, value: T, created_at: Instant, tid: u32) {
+        self.buffer.push_back(BufferEntry {
+            created_at,
+            value,
+            tid,
+        });
     }
 
     pub fn remove_expired(&mut self) {
@@ -70,7 +75,7 @@ mod tests {
     fn expired_markers_are_removed() {
         let one_ms = Duration::new(0, 100000);
         let mut time_expiring_buffer = TimeExpiringBuffer::new(one_ms);
-        time_expiring_buffer.push_back(Box::new(StaticStringMarker::new("Marker 1")));
+        time_expiring_buffer.push_back(0, Box::new(StaticStringMarker::new("Marker 1")));
         assert_equal!(
             time_expiring_buffer.buffer.len(),
             1,
@@ -80,8 +85,8 @@ mod tests {
         // Sleep, this is a bit risky and could have intermittents if things are slow.
         sleep(Duration::new(0, 120000));
 
-        time_expiring_buffer.push_back(Box::new(StaticStringMarker::new("Marker 2")));
-        time_expiring_buffer.push_back(Box::new(StaticStringMarker::new("Marker 3")));
+        time_expiring_buffer.push_back(0, Box::new(StaticStringMarker::new("Marker 2")));
+        time_expiring_buffer.push_back(0, Box::new(StaticStringMarker::new("Marker 3")));
         time_expiring_buffer.remove_expired();
 
         assert_equal!(

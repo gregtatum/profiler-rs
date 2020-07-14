@@ -16,7 +16,6 @@ pub enum SuspendAndSampleError {
 
 pub struct Sample {
     pub native_stack: NativeStack,
-    pub thread_id: u32,
 }
 
 pub trait Sampler: Send {
@@ -206,6 +205,7 @@ impl<'a> SamplesSerializer<'a> {
     pub fn new(
         profiler_start: &'a Instant,
         buffer: &'a TimeExpiringBuffer<Sample>,
+        tid_to_match: u32,
     ) -> SamplesSerializer<'a> {
         let mut buffer_entry_to_stack_table = Vec::new();
         let mut stack_table: Vec<StackForSerialization> = vec![];
@@ -215,13 +215,15 @@ impl<'a> SamplesSerializer<'a> {
         for BufferEntry {
             value,
             created_at: _,
+            tid,
         } in buffer.iter()
         {
-            let Sample {
-                native_stack,
-                // TODO - The entries need to be read once for each thread.
-                thread_id: _,
-            } = value;
+            if *tid != tid_to_match {
+                // The entries must be looped over multiple times, once for each
+                // thread info / tid that we have. This current entry doesn't match.
+                continue;
+            }
+            let Sample { native_stack } = value;
 
             let mut last_matching_stack_index = None;
 
@@ -377,7 +379,6 @@ mod tests {
         }
         Sample {
             native_stack: native_stack,
-            thread_id: 0,
         }
     }
 
@@ -390,6 +391,7 @@ mod tests {
             buffer.push_back_at(
                 add_stack_sample(&stacks),
                 *profiler_start + Duration::from_millis(index as u64),
+                0,
             );
         }
         buffer
@@ -413,7 +415,7 @@ mod tests {
                 vec![0x12, 0x11, 0x10],
             ],
         );
-        let serializer = SamplesSerializer::new(&profiler_start, &buffer);
+        let serializer = SamplesSerializer::new(&profiler_start, &buffer, 0);
         // Convert the stack table into an easy to assert tuple of form (instruction_ptr, prefix).
         let stack_table: Vec<(ProcessMemoryAddress, Option<usize>)> = serializer
             .stack_table
@@ -475,7 +477,7 @@ mod tests {
                 vec![0x12, 0x11, 0x10],
             ],
         );
-        let serializer = SamplesSerializer::new(&profiler_start, &buffer);
+        let serializer = SamplesSerializer::new(&profiler_start, &buffer, 0);
         let mut string_table = StringTable::new();
 
         assert_equal!(

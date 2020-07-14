@@ -126,10 +126,10 @@ impl SamplerThread {
                 match sampler.suspend_and_sample_thread() {
                     Ok(native_stack) => {
                         self.to_buffer_thread
-                            .send(BufferThreadMessage::AddSample(Sample {
-                                native_stack,
-                                thread_id: sampler.thread_id(),
-                            }))
+                            .send(BufferThreadMessage::AddSample(
+                                sampler.thread_id(),
+                                Sample { native_stack },
+                            ))
                             .expect("Unable to send a sample to the buffer thread.");
                     }
                     Err(_) => {}

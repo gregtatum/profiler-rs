@@ -44,8 +44,8 @@ pub struct MainThreadCore {
 /// registered, which then sets the value.
 #[derive(Clone)]
 pub struct ThreadInfo {
-    thread_id: u32,
-    thread_name: String,
+    pub id: u32,
+    pub name: String,
 }
 
 impl MainThreadCore {
@@ -197,12 +197,13 @@ impl ThreadRegistrar {
             thread_info,
         } = self;
 
+        let tid = MacOsSampler::request_thread_id();
         {
             let mut thread_info = thread_info.lock().unwrap();
             *thread_info = Some(ThreadInfo {
-                thread_id: MacOsSampler::request_thread_id(),
+                id: tid,
                 // TODO - We can look this up with system calls.
-                thread_name,
+                name: thread_name,
             });
         }
 
@@ -214,32 +215,34 @@ impl ThreadRegistrar {
             .send(SamplerThreadMessage::RegisterSampler(MacOsSampler::new()))
             .expect("Expected to send a message to the sampler thread.");
 
-        BUFFER_THREAD_SENDER.with(|maybe_sender| {
-            *maybe_sender.borrow_mut() = Some(buffer_thread_sender);
-        });
-
-        SAMPLER_THREAD_SENDER.with(|maybe_sender| {
-            *maybe_sender.borrow_mut() = Some(sampler_thread_sender);
+        PER_THREAD_INSTRUMENTATION.with(|maybe_sender| {
+            *maybe_sender.borrow_mut() = Some(PerThreadInstrumentation {
+                buffer_thread_sender,
+                sampler_thread_sender,
+                tid,
+            });
         });
     }
 
     fn unregister_thread(&mut self) {
         // Grab the sampler thread from thread local storage.
-        SAMPLER_THREAD_SENDER.with(|maybe_sender| {
+        PER_THREAD_INSTRUMENTATION.with(|maybe_instrumentation| {
             {
                 // Send a message to the sampler thread to remove it.
-                let sender = &*maybe_sender.borrow();
+                let instrumentation = &*maybe_instrumentation.borrow();
 
-                sender
+                instrumentation
                     .as_ref()
-                    .expect("The SAMPLER_THREAD_SENDER did not exist.")
+                    .expect("The PER_THREAD_INSTRUMENTATION did not exist.")
+                    .sampler_thread_sender
                     .send(SamplerThreadMessage::UnregisterSampler(
                         MacOsSampler::request_thread_id(),
                     ))
                     .expect("Expected to send a message to the sampler thread.");
             }
-            // Finally set the sender to None, which is a noop if it's already None.
-            *maybe_sender.borrow_mut() = None;
+            // Finally set the instrumentation to None, which is a noop if it's already
+            // None.
+            *maybe_instrumentation.borrow_mut() = None;
         });
     }
 }
@@ -253,20 +256,23 @@ impl Drop for ThreadRegistrar {
 // Each thread local value here is used on the instrumented thread to coordinate with
 // recording values into the buffer.
 thread_local! {
-    static BUFFER_THREAD_SENDER: RefCell<
-        Option<mpsc::Sender<BufferThreadMessage>>
-    > = RefCell::new(None);
-
-    static SAMPLER_THREAD_SENDER: RefCell<
-        Option<mpsc::Sender<SamplerThreadMessage>>
+    static PER_THREAD_INSTRUMENTATION: RefCell<
+        Option<PerThreadInstrumentation>
     > = RefCell::new(None);
 }
 
+struct PerThreadInstrumentation {
+    tid: u32,
+    buffer_thread_sender: mpsc::Sender<BufferThreadMessage>,
+    sampler_thread_sender: mpsc::Sender<SamplerThreadMessage>,
+}
+
 pub fn add_marker(marker: Box<dyn Marker + Send>) {
-    BUFFER_THREAD_SENDER.with(|sender| match *sender.borrow() {
-        Some(ref sender) => {
-            sender
-                .send(BufferThreadMessage::AddMarker(marker))
+    PER_THREAD_INSTRUMENTATION.with(|instrumentation| match *instrumentation.borrow() {
+        Some(ref instrumentation) => {
+            instrumentation
+                .buffer_thread_sender
+                .send(BufferThreadMessage::AddMarker(instrumentation.tid, marker))
                 .expect("Unable to send a marker to the buffer thread.");
         }
         None => {}
@@ -311,6 +317,46 @@ mod tests {
         }
     }
 
+    fn extract_marker_json(
+        profile: &mut serde_json::Value,
+        index: usize,
+    ) -> (StringTable, serde_json::Value) {
+        let mut threads = profile
+            // Access threads.
+            .get_mut("threads")
+            .expect("found threads")
+            .as_array_mut()
+            .expect("threads are an array")
+            .to_owned();
+
+        let mut thread = threads
+            .get_mut(index)
+            .expect("found the thread at the index")
+            .as_object_mut()
+            .expect("the thread is an object")
+            .to_owned();
+
+        let mut markers: MarkersTable = thread
+            // Now get the markers out of the array.
+            .get_mut("markers")
+            .expect("found markers")
+            .as_object_mut()
+            .expect("markers are an object")
+            .to_owned();
+
+        set_time_values_to_zero(&mut markers);
+
+        let string_table = StringTable::from_json(
+            thread
+                .get("stringTable")
+                .expect("got string table from thread")
+                .as_array()
+                .expect("the string table is an array"),
+        );
+
+        (string_table, json!(markers))
+    }
+
     #[test]
     fn can_create_and_store_markers() {
         let mut profiler_core =
@@ -325,6 +371,10 @@ mod tests {
             add_marker(Box::new(StaticStringMarker::new("Thread 1, Marker 3")));
         });
 
+        thread_handle1
+            .join()
+            .expect("Joined the thread handle for the test.");
+
         let mut thread_registrar2 = profiler_core.get_thread_registrar();
 
         let thread_handle2 = thread::spawn(move || {
@@ -335,61 +385,41 @@ mod tests {
             add_marker(Box::new(StaticStringMarker::new("Thread 2, Marker 3")));
         });
 
-        thread_handle1
-            .join()
-            .expect("Joined the thread handle for the test.");
-
         thread_handle2
             .join()
             .expect("Joined the thread handle for the test.");
 
-        let mut thread = profiler_core
-            .serialize()
-            // Access threads.
-            .get_mut("threads")
-            .expect("found threads")
-            .as_array_mut()
-            .expect("threads are an array")
-            // Get the first thread.
-            .get_mut(0)
-            .expect("found the first thread")
-            .as_object_mut()
-            .expect("the thread is an object")
-            .to_owned();
+        let mut profile = profiler_core.serialize();
 
-        let mut markers: MarkersTable = thread
-            // Now get the markers out of the array.
-            .get_mut("markers")
-            .expect("found markers")
-            .as_object_mut()
-            .expect("markers are an object")
-            .to_owned();
+        {
+            let (mut string_table, markers_json) = extract_marker_json(&mut profile, 0);
+            assert_equal!(
+                markers_json,
+                serde_json::json!({
+                    "schema": { "name": 0, "time": 1, "category": 2, "data": 3 },
+                    "data": [
+                        [string_table.get_index("Thread 1, Marker 1"), 0, 0],
+                        [string_table.get_index("Thread 1, Marker 2"), 0, 0],
+                        [string_table.get_index("Thread 1, Marker 3"), 0, 0],
+                    ]
+                })
+            );
+        }
 
-        set_time_values_to_zero(&mut markers);
-        let time_value = 0;
-
-        let mut string_table = StringTable::from_json(
-            thread
-                .get("stringTable")
-                .expect("got string table from thread")
-                .as_array()
-                .expect("the string table is an array"),
-        );
-
-        assert_equal!(
-            json!(markers),
-            serde_json::json!({
-                "schema": { "name": 0, "time": 1, "category": 2, "data": 3 },
-                "data": [
-                    [string_table.get_index("Thread 1, Marker 1"), time_value, 0],
-                    [string_table.get_index("Thread 1, Marker 2"), time_value, 0],
-                    [string_table.get_index("Thread 1, Marker 3"), time_value, 0],
-                    [string_table.get_index("Thread 2, Marker 1"), time_value, 0],
-                    [string_table.get_index("Thread 2, Marker 2"), time_value, 0],
-                    [string_table.get_index("Thread 2, Marker 3"), time_value, 0],
-                ]
-            })
-        );
+        {
+            let (mut string_table, markers_json) = extract_marker_json(&mut profile, 1);
+            assert_equal!(
+                markers_json,
+                serde_json::json!({
+                    "schema": { "name": 0, "time": 1, "category": 2, "data": 3 },
+                    "data": [
+                        [string_table.get_index("Thread 2, Marker 1"), 0, 0],
+                        [string_table.get_index("Thread 2, Marker 2"), 0, 0],
+                        [string_table.get_index("Thread 2, Marker 3"), 0, 0],
+                    ]
+                })
+            );
+        }
     }
 
     #[test]
