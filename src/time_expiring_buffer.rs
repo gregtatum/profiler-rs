@@ -54,8 +54,9 @@ impl<T> TimeExpiringBuffer<T> {
         }
     }
 
-    pub fn iter(&self) -> std::collections::vec_deque::Iter<BufferEntry<T>> {
-        self.buffer.iter()
+    /// Iterate over the buffer for a specific thread.
+    pub fn iter_thread(&self, tid: u32) -> impl Iterator<Item = &BufferEntry<T>> {
+        self.buffer.iter().filter(move |entry| entry.tid == tid)
     }
 
     pub fn len(&self) -> usize {

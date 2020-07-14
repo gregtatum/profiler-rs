@@ -141,7 +141,7 @@ impl BufferThread {
                         "pid": pid,
                         "markers": serialize_markers_in_buffer(
                             &self.markers, &core_info.start_time, &mut string_table, thread_info.id),
-                        "samples": samples_serializer.serialize_samples(),
+                        "samples": samples_serializer.serialize_samples(thread_info.id),
                         "stackTable": samples_serializer.serialize_stack_table(),
                         "frameTable": samples_serializer.serialize_frame_table(&mut string_table),
                         "stringTable": string_table.serialize(),

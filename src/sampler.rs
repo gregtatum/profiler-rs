@@ -205,7 +205,7 @@ impl<'a> SamplesSerializer<'a> {
     pub fn new(
         profiler_start: &'a Instant,
         buffer: &'a TimeExpiringBuffer<Sample>,
-        tid_to_match: u32,
+        tid: u32,
     ) -> SamplesSerializer<'a> {
         let mut buffer_entry_to_stack_table = Vec::new();
         let mut stack_table: Vec<StackForSerialization> = vec![];
@@ -215,14 +215,9 @@ impl<'a> SamplesSerializer<'a> {
         for BufferEntry {
             value,
             created_at: _,
-            tid,
-        } in buffer.iter()
+            tid: _,
+        } in buffer.iter_thread(tid)
         {
-            if *tid != tid_to_match {
-                // The entries must be looped over multiple times, once for each
-                // thread info / tid that we have. This current entry doesn't match.
-                continue;
-            }
             let Sample { native_stack } = value;
 
             let mut last_matching_stack_index = None;
@@ -309,7 +304,7 @@ impl<'a> SamplesSerializer<'a> {
         })
     }
 
-    pub fn serialize_samples(&self) -> serde_json::Value {
+    pub fn serialize_samples(&self, tid: u32) -> serde_json::Value {
         // https://github.com/firefox-devtools/profiler/blob/04d81d51ed394827bff9c22e540993abeff1db5e/src/types/gecko-profile.js#L61
         json!({
             "schema": {
@@ -319,7 +314,7 @@ impl<'a> SamplesSerializer<'a> {
             },
             "data": self
                 .buffer
-                .iter()
+                .iter_thread(tid)
                 .enumerate()
                 .map(|(index, entry)| {
                     let time = entry
@@ -329,7 +324,11 @@ impl<'a> SamplesSerializer<'a> {
                     let stack = self.buffer_entry_to_stack_table
                         .get(index)
                         .expect("Unable to convert a buffer entry to the stack table.");
-                    json!([stack, time, 0])
+                    json!([
+                        stack,
+                        time,
+                        0 // responsiveness
+                    ])
                 })
                 .collect::<serde_json::Value>()
         })
@@ -465,6 +464,7 @@ mod tests {
         // an stack that is made up of instruction addresses. The instruction addresses were
         // chosen such that the instruction address would be the same as the stack index.
         let profiler_start = Instant::now();
+        let tid = 0;
         let buffer = create_buffer_for_tests(
             &profiler_start,
             vec![
@@ -477,7 +477,7 @@ mod tests {
                 vec![0x12, 0x11, 0x10],
             ],
         );
-        let serializer = SamplesSerializer::new(&profiler_start, &buffer, 0);
+        let serializer = SamplesSerializer::new(&profiler_start, &buffer, tid);
         let mut string_table = StringTable::new();
 
         assert_equal!(
@@ -532,7 +532,7 @@ mod tests {
         );
 
         assert_equal!(
-            serializer.serialize_samples(),
+            serializer.serialize_samples(tid),
             json!({
                 "schema": {
                     "stack": 0,

@@ -44,12 +44,11 @@ pub fn serialize_markers_in_buffer(
     buffer: &TimeExpiringBuffer<Box<dyn Marker + Send>>,
     thread_start: &Instant,
     string_table: &mut StringTable,
-    tid_to_match: u32,
+    tid: u32,
 ) -> Value {
     // https://github.com/firefox-devtools/profiler/blob/04d81d51ed394827bff9c22e540993abeff1db5e/src/types/gecko-profile.js#L24
     let data: Vec<Value> = buffer
-        .iter()
-        .filter(|entry| entry.tid == tid_to_match)
+        .iter_thread(tid)
         .map(|entry| {
             entry
                 .value
