@@ -175,11 +175,11 @@ impl MainThreadCore {
 ///    use std::time::Duration;
 ///    use std::thread;
 ///
-///    let profiler_core = MainThreadCore::new(Duration::new(60, 0), Duration::from_millis(10));
+///    let mut profiler_core = MainThreadCore::new(Duration::new(60, 0), Duration::from_millis(10));
 ///    let mut thread_registrar = profiler_core.get_thread_registrar();
 ///
 ///    let thread_handle = thread::spawn(move || {
-///        thread_registrar.register();
+///        thread_registrar.register("Thread name".into());
 ///        // At the end of the scope, the thread is automatically unregistered.
 ///    });
 /// ```

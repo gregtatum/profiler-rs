@@ -404,12 +404,13 @@ mod tests {
         let buffer = create_buffer_for_tests(
             &profiler_start,
             vec![
-                vec![0x10, 0x11, 0x12],
-                vec![0x10, 0x11, 0x12, 0x13],
-                vec![0x10, 0x11, 0x12, 0x13, 0x14],
-                vec![0x10, 0x15, 0x16],
-                vec![0x10, 0x15, 0x16, 0x17],
-                vec![0x10, 0x11, 0x12],
+                // Stacks are recorded leaf to root
+                vec![0x12, 0x11, 0x10],
+                vec![0x13, 0x12, 0x11, 0x10],
+                vec![0x14, 0x13, 0x12, 0x11, 0x10],
+                vec![0x16, 0x15, 0x10],
+                vec![0x17, 0x16, 0x15, 0x10],
+                vec![0x12, 0x11, 0x10],
             ],
         );
         let serializer = SamplesSerializer::new(&profiler_start, &buffer);
@@ -432,10 +433,10 @@ mod tests {
 
         // This assertion tests that the instruction pointers are all sequential, as the test
         // data was laid out this way. Finally, the prefixes should match the structure
-        // of the test dat.
-        assert_eq!(
+        // of the test data.
+        assert_equal!(
             stack_table,
-            [
+            vec![
                 // (instruction_ptr, prefix)
                 (from_u8(0x10), None),
                 (from_u8(0x11), Some(0)),
@@ -445,7 +446,7 @@ mod tests {
                 (from_u8(0x15), Some(0)),
                 (from_u8(0x16), Some(5)),
                 (from_u8(0x17), Some(6)),
-            ],
+            ]
         );
 
         // Each stack should point to its unique entry. Of special note: the first and last entry
@@ -465,12 +466,13 @@ mod tests {
         let buffer = create_buffer_for_tests(
             &profiler_start,
             vec![
-                vec![0x10, 0x11, 0x12],
-                vec![0x10, 0x11, 0x12, 0x13],
-                vec![0x10, 0x11, 0x12, 0x13, 0x14],
-                vec![0x10, 0x15, 0x16],
-                vec![0x10, 0x15, 0x16, 0x17],
-                vec![0x10, 0x11, 0x12],
+                // Stacks are recorded leaf to root
+                vec![0x12, 0x11, 0x10],
+                vec![0x13, 0x12, 0x11, 0x10],
+                vec![0x14, 0x13, 0x12, 0x11, 0x10],
+                vec![0x16, 0x15, 0x10],
+                vec![0x17, 0x16, 0x15, 0x10],
+                vec![0x12, 0x11, 0x10],
             ],
         );
         let serializer = SamplesSerializer::new(&profiler_start, &buffer);
@@ -484,7 +486,7 @@ mod tests {
                     "frame": 1,
                 },
                 "data": [
-                    [-1, 0],
+                    [null, 0],
                     [0, 1],
                     [1, 2],
                     [2, 3],
@@ -510,14 +512,14 @@ mod tests {
                     "subcategory": 7,
                 },
                 "data": [
-                    [string_table.get_index("0x10"), false, null, null, null, null, null, null],
-                    [string_table.get_index("0x11"), false, null, null, null, null, null, null],
-                    [string_table.get_index("0x12"), false, null, null, null, null, null, null],
-                    [string_table.get_index("0x13"), false, null, null, null, null, null, null],
-                    [string_table.get_index("0x14"), false, null, null, null, null, null, null],
-                    [string_table.get_index("0x15"), false, null, null, null, null, null, null],
-                    [string_table.get_index("0x16"), false, null, null, null, null, null, null],
-                    [string_table.get_index("0x17"), false, null, null, null, null, null, null],
+                    [string_table.get_index("0x10"), false, null, null, null, null, 0, null],
+                    [string_table.get_index("0x11"), false, null, null, null, null, 0, null],
+                    [string_table.get_index("0x12"), false, null, null, null, null, 0, null],
+                    [string_table.get_index("0x13"), false, null, null, null, null, 0, null],
+                    [string_table.get_index("0x14"), false, null, null, null, null, 0, null],
+                    [string_table.get_index("0x15"), false, null, null, null, null, 0, null],
+                    [string_table.get_index("0x16"), false, null, null, null, null, 0, null],
+                    [string_table.get_index("0x17"), false, null, null, null, null, 0, null],
                 ],
             })
         );
