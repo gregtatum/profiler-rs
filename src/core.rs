@@ -5,6 +5,7 @@ use crate::sampler_thread::{SamplerThread, SamplerThreadMessage};
 use serde_json;
 use std::cell::RefCell;
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
@@ -21,7 +22,9 @@ pub enum SerializationMessage {
 }
 
 /// The MainThreadCore is the orchestrator that coordinates the registration between multiple
-/// threads.
+/// threads. It can request serialization from the buffer thread, which once it does
+/// it also passes in anything relevant that it knows using the CoreInfoForSerialization
+/// struct.
 pub struct MainThreadCore {
     start_time: Instant,
     sampling_interval: Duration,
@@ -30,6 +33,19 @@ pub struct MainThreadCore {
     buffer_thread_sender: mpsc::Sender<BufferThreadMessage>,
     serialization_receiver: mpsc::Receiver<SerializationMessage>,
     sampler_thread_sender: mpsc::Sender<SamplerThreadMessage>,
+    registered_thread_info: Vec<Arc<Mutex<Option<ThreadInfo>>>>,
+}
+
+/// This struct is the plain old data that we use to know something about what
+/// threads are registered with the profiler. This is used during serialization
+/// to be able to extract the information from the buffers, and output meta
+/// data about each thread. It's co-owned by the MainThreadCore and the ThreadRegistrar
+/// which temporarily passes an Option<ThreadInfo> set to None to the thread being
+/// registered, which then sets the value.
+#[derive(Clone)]
+pub struct ThreadInfo {
+    thread_id: u32,
+    thread_name: String,
 }
 
 impl MainThreadCore {
@@ -72,13 +88,18 @@ impl MainThreadCore {
             sampler_thread_sender,
             serialization_receiver,
             sampling_interval,
+            registered_thread_info: Vec::new(),
         }
     }
 
-    pub fn get_thread_registrar(&self) -> ThreadRegistrar {
+    pub fn get_thread_registrar(&mut self) -> ThreadRegistrar {
+        let thread_info = Arc::new(Mutex::new(None));
+        self.registered_thread_info.push(thread_info.clone());
+
         ThreadRegistrar {
             buffer_thread_sender: Some(self.buffer_thread_sender.clone()),
             sampler_thread_sender: Some(self.sampler_thread_sender.clone()),
+            thread_info,
         }
     }
 
@@ -105,6 +126,14 @@ impl MainThreadCore {
                 CoreInfoForSerialization {
                     start_time: self.start_time,
                     sampling_interval: self.sampling_interval.as_millis() as u64,
+                    thread_infos: {
+                        self.registered_thread_info
+                            .iter()
+                            .map(|thread_info| (*thread_info.lock().unwrap()).clone())
+                            .filter(|thread_info| thread_info.is_some())
+                            .map(|thread_info| thread_info.unwrap())
+                            .collect::<Vec<ThreadInfo>>()
+                    },
                 },
             ))
             .expect("Unable to send a message to the buffer thread to serialize markers");
@@ -157,14 +186,25 @@ impl MainThreadCore {
 pub struct ThreadRegistrar {
     pub buffer_thread_sender: Option<mpsc::Sender<BufferThreadMessage>>,
     pub sampler_thread_sender: Option<mpsc::Sender<SamplerThreadMessage>>,
+    thread_info: Arc<Mutex<Option<ThreadInfo>>>,
 }
 
 impl ThreadRegistrar {
-    pub fn register(&mut self) {
+    pub fn register(&mut self, thread_name: String) {
         let ThreadRegistrar {
             buffer_thread_sender,
             sampler_thread_sender,
+            thread_info,
         } = self;
+
+        {
+            let mut thread_info = thread_info.lock().unwrap();
+            *thread_info = Some(ThreadInfo {
+                thread_id: MacOsSampler::request_thread_id(),
+                // TODO - We can look this up with system calls.
+                thread_name,
+            });
+        }
 
         let err = "The ThreadRegistrar was already used.";
         let buffer_thread_sender = buffer_thread_sender.take().expect(err);
@@ -273,11 +313,12 @@ mod tests {
 
     #[test]
     fn can_create_and_store_markers() {
-        let profiler_core = MainThreadCore::new(Duration::new(60, 0), Duration::from_millis(10));
+        let mut profiler_core =
+            MainThreadCore::new(Duration::new(60, 0), Duration::from_millis(10));
         let mut thread_registrar1 = profiler_core.get_thread_registrar();
 
         let thread_handle1 = thread::spawn(move || {
-            thread_registrar1.register();
+            thread_registrar1.register("Example thread 1".into());
             thread::sleep(Duration::from_millis(100));
             add_marker(Box::new(StaticStringMarker::new("Thread 1, Marker 1")));
             add_marker(Box::new(StaticStringMarker::new("Thread 1, Marker 2")));
@@ -287,7 +328,7 @@ mod tests {
         let mut thread_registrar2 = profiler_core.get_thread_registrar();
 
         let thread_handle2 = thread::spawn(move || {
-            thread_registrar2.register();
+            thread_registrar2.register("Example thread 2".into());
             thread::sleep(Duration::from_millis(200));
             add_marker(Box::new(StaticStringMarker::new("Thread 2, Marker 1")));
             add_marker(Box::new(StaticStringMarker::new("Thread 2, Marker 2")));
@@ -357,7 +398,8 @@ mod tests {
         use std::sync::Arc;
 
         // Initialize the profiler core.
-        let profiler_core = MainThreadCore::new(Duration::new(60, 0), Duration::from_millis(10));
+        let mut profiler_core =
+            MainThreadCore::new(Duration::new(60, 0), Duration::from_millis(10));
 
         // Create a shared reference to signal to the threads to shut down.
         let do_shutdown_threads = Arc::new(AtomicBool::new(false));
@@ -367,7 +409,7 @@ mod tests {
             let do_shutdown_threads = do_shutdown_threads.clone();
 
             thread::spawn(move || {
-                thread_registrar.register();
+                thread_registrar.register("Spinning Thread".into());
                 // Just spin in place seeing if it's time to exit.
                 loop {
                     if do_shutdown_threads.load(Ordering::Relaxed) {

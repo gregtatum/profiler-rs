@@ -12,7 +12,7 @@ use std::time::Duration;
 
 fn main() {
   // Initialize the profiler core.
-  let profiler_core =
+  let mut profiler_core =
     profiler::core::MainThreadCore::new(Duration::new(60, 0), Duration::from_millis(10));
 
   // Create a shared reference to signal to the threads to shut down.
@@ -23,7 +23,7 @@ fn main() {
     let do_shutdown_threads = do_shutdown_threads.clone();
 
     thread::spawn(move || {
-      thread_registrar.register();
+      thread_registrar.register("fibonacci".into());
       loop {
         // Compute fibonacci numbers in a loop.
         profiler::core::add_marker(Box::new(profiler::markers::StaticStringMarker::new(

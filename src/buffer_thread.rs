@@ -1,4 +1,4 @@
-use super::core::SerializationMessage;
+use super::core::{SerializationMessage, ThreadInfo};
 use super::markers::{serialize_markers_in_buffer, Marker};
 use super::time_expiring_buffer::TimeExpiringBuffer;
 use crate::sampler::{Sample, SamplesSerializer, StringTable};
@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 pub struct CoreInfoForSerialization {
     pub start_time: Instant,
     pub sampling_interval: u64,
+    pub thread_infos: Vec<ThreadInfo>,
 }
 
 /// This enum collects all of the different types of messages that we can send to the buffer
