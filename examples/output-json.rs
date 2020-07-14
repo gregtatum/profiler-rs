@@ -18,23 +18,27 @@ fn main() {
   // Create a shared reference to signal to the threads to shut down.
   let do_shutdown_threads = Arc::new(AtomicBool::new(false));
 
-  let thread_handle = {
-    let mut thread_registrar = profiler_core.get_thread_registrar();
-    let do_shutdown_threads = do_shutdown_threads.clone();
+  let thread_handles: Vec<thread::JoinHandle<_>> = {
+    (1..6)
+      .map(|i| {
+        let mut thread_registrar = profiler_core.get_thread_registrar();
+        let do_shutdown_threads = do_shutdown_threads.clone();
 
-    thread::spawn(move || {
-      thread_registrar.register("fibonacci".into());
-      loop {
-        // Compute fibonacci numbers in a loop.
-        profiler::core::add_marker(Box::new(profiler::markers::StaticStringMarker::new(
-          "Fibonacci",
-        )));
-        utils::fibonacci(10000);
-        if do_shutdown_threads.load(Ordering::Relaxed) {
-          break;
-        }
-      }
-    })
+        thread::spawn(move || {
+          thread_registrar.register(format!("fibonacci {}", i));
+          loop {
+            // Compute fibonacci numbers in a loop.
+            profiler::core::add_marker(Box::new(profiler::markers::StaticStringMarker::new(
+              "Fibonacci",
+            )));
+            utils::fibonacci(10000);
+            if do_shutdown_threads.load(Ordering::Relaxed) {
+              break;
+            }
+          }
+        })
+      })
+      .collect()
   };
 
   profiler_core.start_sampling();
@@ -44,7 +48,9 @@ fn main() {
 
   // Signal to the threads that it's time to shut down.
   do_shutdown_threads.store(true, Ordering::Relaxed);
-  thread_handle.join().expect("Joined the thread handle.");
+  for thread_handle in thread_handles {
+    thread_handle.join().expect("Joined the thread handle.");
+  }
 
   println!("Samples collected: {}", profiler_core.get_sample_count());
   println!("Serializing profile");
